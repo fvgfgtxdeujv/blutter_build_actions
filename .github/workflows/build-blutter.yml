@@ -1,0 +1,115 @@
+name: Build Blutter Binary
+
+on:
+  workflow_dispatch:
+    inputs:
+      dart_version:
+        description: 'Dart version (e.g. 3.3.4, 3.4.2)'
+        required: true
+        default: '3.3.4'
+      os_name:
+        description: 'Target OS'
+        required: true
+        default: 'android'
+        type: choice
+        options: [android, ios]
+      arch:
+        description: 'Target architecture'
+        required: true
+        default: 'arm64'
+        type: choice
+        options: [arm64, x64]
+      rebuild:
+        description: 'Force rebuild even if binary exists in cache'
+        required: true
+        default: 'false'
+        type: boolean
+
+jobs:
+  build-linux:
+    name: Build (Linux)
+    runs-on: ubuntu-24.04
+    outputs:
+      artifact_name: ${{ steps.upload.outputs.artifact_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y python3-pyelftools python3-requests \
+            cmake ninja-build build-essential pkg-config \
+            libicu-dev libcapstone-dev git
+
+      - name: Cache Dart SDK checkout
+        uses: actions/cache@v4
+        with:
+          path: dartsdk/
+          key: dart-linux-${{ inputs.dart_version }}
+          restore-keys: dart-linux-${{ inputs.dart_version }}_
+
+      - name: Cache compiled Dart VM static library
+        uses: actions/cache@v4
+        with:
+          path: packages/
+          key: dart-linux-pkg-${{ inputs.dart_version }}-${{ inputs.os_name }}-${{ inputs.arch }}
+          restore-keys: dart-linux-pkg-${{ inputs.dart_version }}-
+
+      - name: Build blutter (Linux)
+        run: |
+          $VER = "${{ inputs.dart_version }}_${{ inputs.os_name }}_${{ inputs.arch }}"
+          python blutter.py --rebuild --dart-version $VER build/out --no-analysis
+
+      - name: Upload Linux binary
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: blutter_${{ inputs.dart_version }}_${{ inputs.os_name }}_${{ inputs.arch }}_linux
+          path: bin/blutter_dartvm${{ inputs.dart_version }}_${{ inputs.os_name }}_${{ inputs.arch }}
+          retention-days: 90
+
+  build-windows:
+    name: Build (Windows)
+    runs-on: windows-2022
+    outputs:
+      artifact_name: ${{ steps.upload.outputs.artifact_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup MSVC environment
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Install dependencies (choco)
+        run: |
+          choco install -y cmake ninja python git
+          pip install pyelftools requests
+
+      - name: Cache Dart SDK checkout
+        uses: actions/cache@v4
+        with:
+          path: dartsdk/
+          key: dart-win-${{ inputs.dart_version }}
+          restore-keys: dart-win-${{ inputs.dart_version }}_
+
+      - name: Cache compiled Dart VM static library
+        uses: actions/cache@v4
+        with:
+          path: packages/
+          key: dart-win-pkg-${{ inputs.dart_version }}-${{ inputs.os_name }}-${{ inputs.arch }}
+          restore-keys: dart-win-pkg-${{ inputs.dart_version }}-
+
+      - name: Build blutter (Windows)
+        run: |
+          $env:HTTP_PROXY = ""
+          $env:HTTPS_PROXY = ""
+          python blutter.py --rebuild --dart-version ${{ inputs.dart_version }}_${{ inputs.os_name }}_${{ inputs.arch }} build\out --no-analysis
+
+      - name: Upload Windows binary
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: blutter_${{ inputs.dart_version }}_${{ inputs.os_name }}_${{ inputs.arch }}_windows
+          path: bin/blutter_dartvm${{ inputs.dart_version }}_${{ inputs.os_name }}_${{ inputs.arch }}.exe
+          retention-days: 90
