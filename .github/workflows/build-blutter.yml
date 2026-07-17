@@ -6,7 +6,9 @@ on:
       dart_version:
         description: 'Dart version (e.g. 3.3.4, 3.4.2)'
         required: true
-        default: '3.3.4'
+
+permissions:
+  contents: write
 
 jobs:
   build-linux:
@@ -42,9 +44,8 @@ jobs:
       - name: Upload Linux binary
         uses: actions/upload-artifact@v4
         with:
-          name: blutter_${{ inputs.dart_version }}_linux
+          name: linux
           path: bin/blutter_dartvm${{ inputs.dart_version }}_android_arm64
-          retention-days: 90
 
   build-windows:
     name: Build (Windows)
@@ -80,6 +81,33 @@ jobs:
       - name: Upload Windows binary
         uses: actions/upload-artifact@v4
         with:
-          name: blutter_${{ inputs.dart_version }}_windows
+          name: windows
           path: bin/blutter_dartvm${{ inputs.dart_version }}_android_arm64.exe
-          retention-days: 90
+
+  release:
+    name: Create Release
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Linux binary
+        uses: actions/download-artifact@v4
+        with:
+          name: linux
+          path: release/
+
+      - name: Download Windows binary
+        uses: actions/download-artifact@v4
+        with:
+          name: windows
+          path: release/
+
+      - name: Create Release and upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.dart_version }}
+          name: blutter ${{ inputs.dart_version }}
+          files: release/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
