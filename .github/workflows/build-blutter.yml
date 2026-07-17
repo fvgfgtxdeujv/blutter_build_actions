@@ -22,7 +22,7 @@ jobs:
           sudo apt update
           sudo apt install -y python3-pyelftools python3-requests \
             cmake ninja-build build-essential pkg-config \
-            libicu-dev libcapstone-dev git
+            libicu-dev libcapstone-dev git curl unzip
 
       - name: Cache Dart SDK checkout
         uses: actions/cache@v4
@@ -48,35 +48,21 @@ jobs:
           path: bin/blutter_dartvm${{ inputs.dart_version }}_android_arm64
 
   build-windows:
-    name: Build (Windows)
-    runs-on: windows-2022
+    name: Build (Windows cross)
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup MSVC environment
-        uses: microsoft/setup-msbuild@v2
-
-      - name: Install dependencies
+      - name: Install MinGW cross-compiler
         run: |
-          choco install -y cmake ninja python git
-          pip install pyelftools requests
+          sudo apt update
+          sudo apt install -y gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 \
+            cmake ninja-build python3 python3-pip curl unzip
 
-      - name: Cache Dart SDK checkout
-        uses: actions/cache@v4
-        with:
-          path: dartsdk/
-          key: dart-win-${{ inputs.dart_version }}
-          restore-keys: dart-win-${{ inputs.dart_version }}_
-
-      - name: Cache compiled Dart VM static library
-        uses: actions/cache@v4
-        with:
-          path: packages/
-          key: dart-win-pkg-${{ inputs.dart_version }}-android-arm64
-
-      - name: Build blutter (Windows)
+      - name: Build Windows binary (MinGW cross)
         run: |
-          python blutter.py --rebuild --dart-version ${{ inputs.dart_version }}_android_arm64 build\out --no-analysis
+          chmod +x scripts/build_mingw64.sh
+          bash scripts/build_mingw64.sh ${{ inputs.dart_version }}
 
       - name: Upload Windows binary
         uses: actions/upload-artifact@v4
