@@ -16,6 +16,9 @@ on:
         required: false
         type: boolean
         default: true
+  push:
+    branches: [ master ]
+    paths: [ '.github/workflows/build-blutter.yml', 'blutter/**', 'scripts/**' ]
 
 permissions:
   contents: write
@@ -25,6 +28,7 @@ jobs:
     name: Build (${{ inputs.arch_aarch64 && 'aarch64' || 'x86_64' }})
     runs-on: ubuntu-24.04
     env:
+      DART_VERSION: ${{ inputs.dart_version || '3.3.4' }}
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 5G
       CCACHE_COMPILERCHECK: "none"
@@ -38,15 +42,15 @@ jobs:
         uses: actions/cache@v4
         with:
           path: dartsdk/
-          key: dartsdk-${{ inputs.dart_version }}
-          restore-keys: dartsdk-${{ inputs.dart_version }}_
+          key: dartsdk-${{ env.DART_VERSION }}
+          restore-keys: dartsdk-${{ env.DART_VERSION }}_
 
       - name: Restore CCache
         uses: actions/cache@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ inputs.dart_version }}-${{ inputs.arch_aarch64 && 'aarch64' || 'x86_64' }}
-          restore-keys: ccache-${{ inputs.dart_version }}-
+          key: ccache-${{ env.DART_VERSION }}-${{ inputs.arch_aarch64 && 'aarch64' || 'x86_64' }}
+          restore-keys: ccache-${{ env.DART_VERSION }}-
 
       - name: Install dependencies
         run: |
@@ -65,7 +69,7 @@ jobs:
       - name: Clone Dart SDK
         if: steps.cache-dartsdk.outputs.cache-hit != 'true'
         run: |
-          VERSION="${{ inputs.dart_version }}"
+          VERSION="${{ env.DART_VERSION }}"
           mkdir -p dartsdk
           cd dartsdk
           rm -rf "v${VERSION}"
@@ -135,7 +139,7 @@ jobs:
 
       - name: Generate version and source list
         run: |
-          VERSION="${{ inputs.dart_version }}"
+          VERSION="${{ env.DART_VERSION }}"
           cd "dartsdk/v${VERSION}"
 
           # Generate version.cc
@@ -159,7 +163,7 @@ jobs:
 
       - name: Build Dart runtime
         run: |
-          VERSION="${{ inputs.dart_version }}"
+          VERSION="${{ env.DART_VERSION }}"
           cd "dartsdk/v${VERSION}"
 
           mkdir -p ../../build/dartvm${VERSION}_android_arm64
@@ -191,7 +195,7 @@ jobs:
       - name: Detect compatibility macros
         id: macros
         run: |
-          VERSION="${{ inputs.dart_version }}"
+          VERSION="${{ env.DART_VERSION }}"
           INC="../../packages/include/dartvm${VERSION}/vm"
           MACROS=""
 
@@ -209,7 +213,7 @@ jobs:
 
       - name: Build blutter binary (${{ inputs.arch_aarch64 && 'aarch64' || 'x86_64' }})
         run: |
-          VERSION="${{ inputs.dart_version }}"
+          VERSION="${{ env.DART_VERSION }}"
           DARTLIB="dartvm${VERSION}_android_arm64"
           BINNAME="blutter_${DARTLIB}"
 
@@ -250,14 +254,14 @@ jobs:
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
-          name: blutter-${{ inputs.dart_version }}-${{ inputs.arch_aarch64 && 'aarch64' || 'x86_64' }}
-          path: bin/blutter_dartvm${{ inputs.dart_version }}_android_arm64
+          name: blutter-${{ env.DART_VERSION }}-${{ inputs.arch_aarch64 && 'aarch64' || 'x86_64' }}
+          path: bin/blutter_dartvm${{ env.DART_VERSION }}_android_arm64
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.dart_version }}
-          name: blutter ${{ inputs.dart_version }} (${{ inputs.arch_aarch64 && 'aarch64' || 'x86_64' }})
-          files: bin/blutter_dartvm${{ inputs.dart_version }}_android_arm64
+          tag_name: ${{ env.DART_VERSION }}
+          name: blutter ${{ env.DART_VERSION }} (${{ inputs.arch_aarch64 && 'aarch64' || 'x86_64' }})
+          files: bin/blutter_dartvm${{ env.DART_VERSION }}_android_arm64
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
