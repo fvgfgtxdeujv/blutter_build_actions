@@ -49,6 +49,15 @@ jobs:
           git sparse-checkout set runtime tools third_party/double-conversion
           find . -maxdepth 1 -type f -delete
 
+      - name: Verify scripts exist
+        run: |
+          echo "=== Repo root files ==="
+          ls -la
+          echo "=== scripts/ directory ==="
+          ls -la scripts/
+          echo "=== blutter/ directory ==="
+          ls -la blutter/
+
       - name: Generate version and source list
         run: |
           VERSION="${{ inputs.dart_version }}"
