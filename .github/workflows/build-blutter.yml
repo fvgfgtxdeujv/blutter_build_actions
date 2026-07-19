@@ -4,96 +4,191 @@ on:
   workflow_dispatch:
     inputs:
       dart_version:
-        description: 'Dart version (e.g. 3.3.4, 3.4.2)'
+        description: 'Dart version (e.g. 3.3.4, 3.4.2, 3.5.2)'
         required: true
+      arch:
+        description: 'Target architecture'
+        required: true
+        type: choice
+        options:
+          - label: 'x86_64 (Linux native)'
+            value: x86_64
+          - label: 'aarch64 (Android ARM64, cross-compile)'
+            value: aarch64
+        default: aarch64
 
 permissions:
   contents: write
 
 jobs:
-  build-linux:
-    name: Build (Linux)
+  build:
+    name: Build (${{ inputs.arch }})
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
         run: |
-          sudo apt update
-          sudo apt install -y python3-pyelftools python3-requests \
-            cmake ninja-build build-essential pkg-config \
-            libicu-dev libcapstone-dev git curl unzip
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build git curl unzip \
+            python3 python3-pip python3-pyelftools python3-requests \
+            libicu-dev libcapstone-dev
 
-      - name: Cache Dart SDK checkout
-        uses: actions/cache@v4
-        with:
-          path: dartsdk/
-          key: dart-linux-${{ inputs.dart_version }}
-          restore-keys: dart-linux-${{ inputs.dart_version }}_
-
-      - name: Cache compiled Dart VM static library
-        uses: actions/cache@v4
-        with:
-          path: packages/
-          key: dart-linux-pkg-${{ inputs.dart_version }}-android-arm64
-
-      - name: Build blutter (Linux)
+      - name: Clone Dart SDK
         run: |
-          python blutter.py --rebuild --dart-version ${{ inputs.dart_version }}_android_arm64 build/out --no-analysis
+          VERSION="${{ inputs.dart_version }}"
+          mkdir -p dartsdk
+          cd dartsdk
+          rm -rf "v${VERSION}"
+          git clone -c advice.detachedHead=false \
+            -b "${VERSION}" --depth 1 \
+            --filter=blob:none --sparse \
+            https://github.com/dart-lang/sdk.git "v${VERSION}"
+          cd "v${VERSION}"
+          git sparse-checkout set runtime tools third_party/double-conversion
+          find . -maxdepth 1 -type f -delete
 
-      - name: Upload Linux binary
+      - name: Generate version and source list
+        run: |
+          VERSION="${{ inputs.dart_version }}"
+          cd "dartsdk/v${VERSION}"
+
+          # Generate version.cc
+          python3 tools/make_version.py --output runtime/vm/version.cc --input runtime/vm/version_in.cc
+
+          # Generate sourcelist.cmake
+          python3 ../scripts/dartvm_create_srclist.py "$(pwd)"
+
+          # Detect C++ standard
+          STD=$(python3 -c "
+import re
+with open('runtime/tools/run_clang_tidy.dart') as f:
+    c = f.read()
+    p = c.find('-std=c++')
+    print('17' if p == -1 else c[p+8:p+10])
+")
+          echo "CPP_STD=${STD}" >> $GITHUB_ENV
+
+          # Write CMakeLists.txt from template
+          sed -e "s/VERSION_PLACE_HOLDER/${VERSION}/g" \
+              -e "s/CXX_STD_PLACE_HOLDER/${STD}/g" \
+              ../scripts/CMakeLists.txt > CMakeLists.txt
+
+          # Write Config.cmake.in
+          cat > Config.cmake.in << 'EOFC'
+@PACKAGE_INIT@
+include("${CMAKE_CURRENT_LIST_DIR}/dartvmTarget.cmake")
+EOFC
+
+      - name: Build Dart runtime
+        run: |
+          VERSION="${{ inputs.dart_version }}"
+          cd "dartsdk/v${VERSION}"
+
+          mkdir -p ../../build/dartvm${VERSION}_android_arm64
+
+          cmake -GNinja -B ../../build/dartvm${VERSION}_android_arm64 \
+            -DTARGET_OS=android \
+            -DTARGET_ARCH=arm64 \
+            -DCOMPRESSED_PTRS=1 \
+            -DCMAKE_BUILD_TYPE=Release \
+            --log-level=NOTICE \
+            -DCMAKE_INSTALL_PREFIX=../packages \
+            "$(pwd)"
+
+          ninja -C ../../build/dartvm${VERSION}_android_arm64
+          cmake --install ../../build/dartvm${VERSION}_android_arm64
+
+      - name: Detect compatibility macros
+        id: macros
+        run: |
+          VERSION="${{ inputs.dart_version }}"
+          INC="../packages/include/dartvm${VERSION}/vm"
+          MACROS=""
+
+          [ -f "$INC/class_id.h" ] && grep -q "V(LinkedHashMap)" "$INC/class_id.h" && MACROS="$MACROS -DOLD_MAP_SET_NAME=1"
+          [ -f "$INC/class_id.h" ] && ! grep -q "V(ImmutableLinkedHashMap)" "$INC/class_id.h" && MACROS="$MACROS -DOLD_MAP_NO_IMMUTABLE=1"
+          [ -f "$INC/class_id.h" ] && ! grep -q " kLastInternalOnlyCid " "$INC/class_id.h" && MACROS="$MACROS -DNO_LAST_INTERNAL_ONLY_CID=1"
+          [ -f "$INC/class_id.h" ] && grep -q "V(TypeRef)" "$INC/class_id.h" && MACROS="$MACROS -DHAS_TYPE_REF=1"
+          [[ "$VERSION" == 3.* ]] && [ -f "$INC/class_id.h" ] && grep -q "V(RecordType)" "$INC/class_id.h" && MACROS="$MACROS -DHAS_RECORD_TYPE=1"
+          [ -f "$INC/class_table.h" ] && grep -q "class SharedClassTable {" "$INC/class_table.h" && MACROS="$MACROS -DHAS_SHARED_CLASS_TABLE=1"
+          [ -f "$INC/stub_code_list.h" ] && ! grep -q "V(InitLateStaticField)" "$INC/stub_code_list.h" && MACROS="$MACROS -DNO_INIT_LATE_STATIC_FIELD=1"
+          [ -f "$INC/object_store.h" ] && ! grep -q "build_generic_method_extractor_code)" "$INC/object_store.h" && MACROS="$MACROS -DNO_METHOD_EXTRACTOR_STUB=1"
+          [ -f "$INC/object.h" ] && ! grep -q "AsTruncatedInt64Value()" "$INC/object.h" && MACROS="$MACROS -DUNIFORM_INTEGER_ACCESS=1"
+
+          echo "macros=${MACROS}" >> $GITHUB_OUTPUT
+
+      - name: Build blutter binary (${{ inputs.arch }})
+        run: |
+          VERSION="${{ inputs.dart_version }}"
+          DARTLIB="dartvm${VERSION}_android_arm64"
+          BINNAME="blutter_${DARTLIB}"
+
+          if [ "${{ inputs.arch }}" = "aarch64" ]; then
+            echo "=== Cross-compiling for aarch64 ==="
+            sudo dpkg --add-architecture arm64 2>/dev/null || true
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends \
+              gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+              libicu-dev:arm64
+            export PKG_CONFIG_PATH="/usr/aarch64-linux-gnu/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig"
+
+            mkdir -p cross
+            cat > cross/aarch64-toolchain.cmake << 'TC'
+set(CMAKE_SYSTEM_NAME Linux)
+set(CMAKE_SYSTEM_PROCESSOR aarch64)
+set(CMAKE_C_COMPILER   aarch64-linux-gnu-gcc)
+set(CMAKE_CXX_COMPILER aarch64-linux-gnu-g++)
+set(CMAKE_AR           aarch64-linux-gnu-ar)
+set(CMAKE_RANLIB       aarch64-linux-gnu-ranlib)
+set(CMAKE_STRIP        aarch64-linux-gnu-strip)
+set(CMAKE_OBJCOPY      aarch64-linux-gnu-objcopy)
+set(CMAKE_OBJDUMP      aarch64-linux-gnu-objdump)
+set(CMAKE_NM           aarch64-linux-gnu-nm)
+set(CMAKE_READELF      aarch64-linux-gnu-readelf)
+set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
+TC
+            TOOLCHAIN="cross/aarch64-toolchain.cmake"
+          else
+            echo "=== Building native x86_64 ==="
+            TOOLCHAIN=""
+          fi
+
+          mkdir -p build/${BINNAME}
+
+          cmake -GNinja -B build/${BINNAME} \
+            -DDARTLIB="${DARTLIB}" \
+            -DNAME_SUFFIX="" \
+            -DCMAKE_BUILD_TYPE=Release \
+            --log-level=NOTICE \
+            $([ -n "$TOOLCHAIN" ] && echo "-DCMAKE_TOOLCHAIN_FILE=${TOOLCHAIN}") \
+            ${{ steps.macros.outputs.macros }} \
+            blutter
+
+          ninja -C build/${BINNAME}
+          cmake --install build/${BINNAME}
+
+          OUTPUT="bin/${BINNAME}"
+          [ -f "${OUTPUT}.exe" ] && mv "${OUTPUT}.exe" "${OUTPUT}"
+
+          echo "Built: ${OUTPUT}"
+          file "${OUTPUT}"
+
+      - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
-          name: linux
+          name: blutter-${{ inputs.dart_version }}-${{ inputs.arch }}
           path: bin/blutter_dartvm${{ inputs.dart_version }}_android_arm64
 
-  build-windows:
-    name: Build (Windows cross)
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install MinGW cross-compiler
-        run: |
-          sudo apt update
-          sudo apt install -y gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 \
-            cmake ninja-build python3 python3-pip curl unzip
-
-      - name: Build Windows binary (MinGW cross)
-        run: |
-          chmod +x scripts/build_mingw64.sh
-          bash scripts/build_mingw64.sh ${{ inputs.dart_version }}
-
-      - name: Upload Windows binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows
-          path: bin/blutter_dartvm${{ inputs.dart_version }}_android_arm64.exe
-
-  release:
-    name: Create Release
-    needs: [build-linux, build-windows]
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download Linux binary
-        uses: actions/download-artifact@v4
-        with:
-          name: linux
-          path: release/
-
-      - name: Download Windows binary
-        uses: actions/download-artifact@v4
-        with:
-          name: windows
-          path: release/
-
-      - name: Create Release and upload assets
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.dart_version }}
-          name: blutter ${{ inputs.dart_version }}
-          files: release/**/*
+          name: blutter ${{ inputs.dart_version }} (${{ inputs.arch }})
+          files: bin/blutter_dartvm${{ inputs.dart_version }}_android_arm64
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
