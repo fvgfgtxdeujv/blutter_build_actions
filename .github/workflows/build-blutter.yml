@@ -24,8 +24,29 @@ jobs:
   build:
     name: Build (${{ inputs.arch_aarch64 && 'aarch64' || 'x86_64' }})
     runs-on: ubuntu-24.04
+    env:
+      CCACHE_DIR: ${{ runner.temp }}/ccache_blutter
+      CCACHE_MAXSIZE: 5G
+      CCACHE_COMPILERCHECK: "none"
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_NOHARDLINK: "true"
     steps:
       - uses: actions/checkout@v4
+
+      - name: Restore Dart SDK cache
+        id: cache-dartsdk
+        uses: actions/cache@v4
+        with:
+          path: dartsdk/
+          key: dartsdk-${{ inputs.dart_version }}
+          restore-keys: dartsdk-${{ inputs.dart_version }}_
+
+      - name: Restore CCache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ inputs.dart_version }}-${{ inputs.arch_aarch64 && 'aarch64' || 'x86_64' }}
+          restore-keys: ccache-${{ inputs.dart_version }}-
 
       - name: Install dependencies
         run: |
@@ -33,14 +54,22 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             cmake ninja-build git curl unzip \
             python3 python3-pip python3-pyelftools python3-requests \
-            libicu-dev libcapstone-dev
+            libicu-dev libcapstone-dev ccache
+
+      - name: Initialize CCache
+        run: |
+          mkdir -p "${{ env.CCACHE_DIR }}"
+          ccache -M ${{ env.CCACHE_MAXSIZE }}
+          ccache -s
 
       - name: Clone Dart SDK
+        if: steps.cache-dartsdk.outputs.cache-hit != 'true'
         run: |
           VERSION="${{ inputs.dart_version }}"
           mkdir -p dartsdk
           cd dartsdk
           rm -rf "v${VERSION}"
+          echo "Cloning Dart SDK (cache miss)..."
           git clone -c advice.detachedHead=false \
             -b "${VERSION}" --depth 1 \
             --filter=blob:none --sparse \
@@ -79,6 +108,9 @@ jobs:
           cd "dartsdk/v${VERSION}"
 
           mkdir -p ../../build/dartvm${VERSION}_android_arm64
+
+          export CC="ccache gcc"
+          export CXX="ccache g++"
 
           cmake -GNinja -B ../../build/dartvm${VERSION}_android_arm64 \
             -DTARGET_OS=android \
@@ -125,6 +157,8 @@ jobs:
               gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
               libicu-dev:arm64
             export PKG_CONFIG_PATH="/usr/aarch64-linux-gnu/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig"
+            export CC="ccache aarch64-linux-gnu-gcc"
+            export CXX="ccache aarch64-linux-gnu-g++"
 
             mkdir -p cross
             printf '%s\n' \
@@ -149,6 +183,8 @@ jobs:
             TOOLCHAIN="cross/aarch64-toolchain.cmake"
           else
             echo "=== Building native x86_64 ==="
+            export CC="ccache gcc"
+            export CXX="ccache g++"
             TOOLCHAIN=""
           fi
 
@@ -171,6 +207,7 @@ jobs:
 
           echo "Built: ${OUTPUT}"
           file "${OUTPUT}"
+          ccache -s
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
