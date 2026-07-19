@@ -40,31 +40,41 @@ def run(cmd, **kwargs):
 
 
 def setup_cross_compiler():
-    """Install clang and build ICU from source for aarch64"""
+    """Install clang and arm64 ICU from Ubuntu ports"""
     print("[*] Setting up clang cross-compiler...")
 
-    # Install clang (no need for gcc-aarch64-linux-gnu)
+    # Install clang
     run(["sudo", "apt-get", "update", "-qq"])
-
-    # 使用阿里云镜像解决 arm64 仓库 404 问题
-    run(["sudo", "sed", "-i",
-         "s|http://archive.ubuntu.com/ubuntu/|http://mirrors.aliyun.com/ubuntu/|g",
-         "/etc/apt/sources.list"])
-    run(["sudo", "sed", "-i",
-         "s|http://security.ubuntu.com/ubuntu|http://mirrors.aliyun.com/ubuntu|g",
-         "/etc/apt/sources.list"])
-    run(["sudo", "apt-get", "update", "-qq"])
-
     run(["sudo", "apt-get", "install", "-y", "--no-install-recommends",
-         "clang", "libicu-dev:arm64"])
+         "clang", "libcapstone-dev", "ccache", "wget"])
 
-    # Verify arm64 ICU is installed
-    result = subprocess.run(
-        ["dpkg", "-s", "libicu-dev:arm64"],
-        capture_output=True, text=True
-    )
-    if result.returncode != 0:
-        print("[!] Failed to install libicu-dev:arm64, falling back to source build")
+    # Install arm64 ICU from Ubuntu ports (Ubuntu 24.04 security pocket lacks arm64)
+    print("[*] Installing arm64 ICU from Ubuntu ports...")
+    arch = "arm64"
+    icu_ver = "78.3-2ubuntu1"
+    base_url = "https://ports.ubuntu.com/ubuntu-ports/pool/main/i/icu"
+
+    pkgs = [
+        f"libicu78_{icu_ver}_{arch}.deb",
+        f"libicu-dev_{icu_ver}_{arch}.deb",
+    ]
+
+    for pkg_file in pkgs:
+        pkg_name = pkg_file.rsplit("_", 2)[0]
+        result = subprocess.run(
+            ["dpkg", "-s", f"{pkg_name}:{arch}"],
+            capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            print(f"[=] {pkg_name}:{arch} already installed")
+            continue
+
+        url = f"{base_url}/{pkg_file}"
+        print(f"  Downloading {url}")
+        run(["wget", "-q", url, "-O", f"/tmp/{pkg_file}"])
+        run(["sudo", "dpkg", "-i", f"/tmp/{pkg_file}"])
+        run(["rm", "-f", f"/tmp/{pkg_file}"])
+        build_icu_from_source(arch)
 
     # Build ICU from source for aarch64
     print("[*] Building ICU for aarch64 (this takes ~2 min)...")
