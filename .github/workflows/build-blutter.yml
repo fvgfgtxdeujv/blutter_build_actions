@@ -6,23 +6,23 @@ on:
       dart_version:
         description: 'Dart version (e.g. 3.3.4, 3.4.2, 3.5.2)'
         required: true
-      arch:
-        description: 'Target architecture'
-        required: true
-        type: choice
-        options:
-          - label: 'x86_64 (Linux native)'
-            value: x86_64
-          - label: 'aarch64 (Android ARM64, cross-compile)'
-            value: aarch64
-        default: aarch64
+      arch_x86_64:
+        description: 'Build for x86_64 (Linux native)'
+        required: false
+        type: boolean
+        default: false
+      arch_aarch64:
+        description: 'Build for aarch64 (Android ARM64, cross-compile)'
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: write
 
 jobs:
   build:
-    name: Build (${{ inputs.arch }})
+    name: Build (${{ inputs.arch_aarch64 && 'aarch64' || 'x86_64' }})
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -111,13 +111,13 @@ jobs:
 
           echo "macros=${MACROS}" >> $GITHUB_OUTPUT
 
-      - name: Build blutter binary (${{ inputs.arch }})
+      - name: Build blutter binary (${{ inputs.arch_aarch64 && 'aarch64' || 'x86_64' }})
         run: |
           VERSION="${{ inputs.dart_version }}"
           DARTLIB="dartvm${VERSION}_android_arm64"
           BINNAME="blutter_${DARTLIB}"
 
-          if [ "${{ inputs.arch }}" = "aarch64" ]; then
+          if [ "${{ inputs.arch_aarch64 }}" = "true" ]; then
             echo "=== Cross-compiling for aarch64 ==="
             sudo dpkg --add-architecture arm64 2>/dev/null || true
             sudo apt-get update -qq
@@ -175,14 +175,14 @@ jobs:
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
-          name: blutter-${{ inputs.dart_version }}-${{ inputs.arch }}
+          name: blutter-${{ inputs.dart_version }}-${{ inputs.arch_aarch64 && 'aarch64' || 'x86_64' }}
           path: bin/blutter_dartvm${{ inputs.dart_version }}_android_arm64
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.dart_version }}
-          name: blutter ${{ inputs.dart_version }} (${{ inputs.arch }})
+          name: blutter ${{ inputs.dart_version }} (${{ inputs.arch_aarch64 && 'aarch64' || 'x86_64' }})
           files: bin/blutter_dartvm${{ inputs.dart_version }}_android_arm64
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
