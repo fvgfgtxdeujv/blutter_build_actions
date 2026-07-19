@@ -141,7 +141,7 @@ jobs:
             export CC="ccache aarch64-linux-gnu-gcc"
             export CXX="ccache aarch64-linux-gnu-g++"
             export PKG_CONFIG_PATH="/usr/aarch64-linux-gnu/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig"
-            TC="-DCMAKE_TOOLCHAIN_FILE=../../cross/aarch64-toolchain.cmake -DICU_ROOT=/usr/aarch64-linux-gnu"
+            TC="-DCMAKE_TOOLCHAIN_FILE=$GITHUB_WORKSPACE/cross/aarch64-toolchain.cmake -DICU_ROOT=/usr/aarch64-linux-gnu"
           else
             export CC="ccache gcc"
             export CXX="ccache g++"
