@@ -78,6 +78,34 @@ jobs:
           git sparse-checkout set runtime tools third_party/double-conversion
           find . -maxdepth 1 -type f -delete
 
+      - name: Setup cross-compiler (aarch64 only)
+        if: inputs.arch_aarch64 == 'true'
+        run: |
+          echo "=== Setting up aarch64 cross-compiler ==="
+          sudo dpkg --add-architecture arm64 2>/dev/null || true
+          sudo apt-get update -qq || true
+          sudo apt-get install -y --no-install-recommends \
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+            libicu-dev
+
+          # 从源码编译 arm64 ICU（apt arm64 仓库不可用）
+          echo "=== Building ICU for aarch64 ==="
+          ICU_VER="75.1"
+          wget -q "https://github.com/unicode-org/icu/releases/download/release-${ICU_VER}/icu4c-${ICU_VER//./_}-src.tgz"
+          tar xzf "icu4c-${ICU_VER//./_}-src.tgz"
+          cd icu/icu4c-${ICU_VER//./_}-source
+          mkdir build-arm64 && cd build-arm64
+          ../source/configure \
+            --host=aarch64-linux-gnu \
+            --prefix=/usr/aarch64-linux-gnu \
+            --disable-shared --enable-static \
+            --disable-samples --disable-tests
+          make -j$(nproc)
+          sudo make install
+          cd ../../..
+          rm -rf icu "icu4c-${ICU_VER//./_}-src.tgz"
+          echo "=== ICU for aarch64 installed ==="
+
       - name: Generate version and source list
         run: |
           VERSION="${{ inputs.dart_version }}"
@@ -109,8 +137,16 @@ jobs:
 
           mkdir -p ../../build/dartvm${VERSION}_android_arm64
 
-          export CC="ccache gcc"
-          export CXX="ccache g++"
+          if [ "${{ inputs.arch_aarch64 }}" = "true" ]; then
+            export CC="ccache aarch64-linux-gnu-gcc"
+            export CXX="ccache aarch64-linux-gnu-g++"
+            export PKG_CONFIG_PATH="/usr/aarch64-linux-gnu/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig"
+            TC="-DCMAKE_TOOLCHAIN_FILE=../../cross/aarch64-toolchain.cmake -DICU_ROOT=/usr/aarch64-linux-gnu"
+          else
+            export CC="ccache gcc"
+            export CXX="ccache g++"
+            TC=""
+          fi
 
           cmake -GNinja -B ../../build/dartvm${VERSION}_android_arm64 \
             -DTARGET_OS=android \
@@ -119,6 +155,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             --log-level=NOTICE \
             -DCMAKE_INSTALL_PREFIX=../../packages \
+            ${TC} \
             "$(pwd)"
 
           ninja -C ../../build/dartvm${VERSION}_android_arm64
@@ -151,11 +188,6 @@ jobs:
 
           if [ "${{ inputs.arch_aarch64 }}" = "true" ]; then
             echo "=== Cross-compiling for aarch64 ==="
-            sudo dpkg --add-architecture arm64 2>/dev/null || true
-            sudo apt-get update -qq
-            sudo apt-get install -y --no-install-recommends \
-              gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
-              libicu-dev:arm64
             export PKG_CONFIG_PATH="/usr/aarch64-linux-gnu/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig"
             export CC="ccache aarch64-linux-gnu-gcc"
             export CXX="ccache aarch64-linux-gnu-g++"
@@ -179,6 +211,8 @@ jobs:
               'set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)' \
               'set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)' \
               'set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)' \
+              '' \
+              'set(CMAKE_PREFIX_PATH "/usr/aarch64-linux-gnu")' \
               > cross/aarch64-toolchain.cmake
             TOOLCHAIN="cross/aarch64-toolchain.cmake"
           else
