@@ -25,11 +25,9 @@ permissions:
 
 jobs:
   build:
-    name: Build (${{ env.ARCH }})
+    name: Build
     runs-on: ubuntu-24.04
     env:
-      DART_VERSION: ${{ inputs.dart_version || '3.3.4' }}
-      ARCH: ${{ inputs.arch_aarch64 && 'aarch64' || 'x86_64' }}
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 5G
       CCACHE_COMPILERCHECK: "none"
@@ -37,6 +35,15 @@ jobs:
       CCACHE_NOHARDLINK: "true"
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set build parameters
+        run: |
+          echo "DART_VERSION=${{ inputs.dart_version || '3.3.4' }}" >> $GITHUB_ENV
+          if [ "${{ inputs.arch_aarch64 || 'true' }}" = "true" ]; then
+            echo "ARCH=aarch64" >> $GITHUB_ENV
+          else
+            echo "ARCH=x86_64" >> $GITHUB_ENV
+          fi
 
       - name: Restore Dart SDK cache
         id: cache-dartsdk
