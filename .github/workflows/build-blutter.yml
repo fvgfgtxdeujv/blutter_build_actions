@@ -25,10 +25,11 @@ permissions:
 
 jobs:
   build:
-    name: Build (${{ inputs.arch_aarch64 && 'aarch64' || 'x86_64' }})
+    name: Build (${{ env.ARCH }})
     runs-on: ubuntu-24.04
     env:
       DART_VERSION: ${{ inputs.dart_version || '3.3.4' }}
+      ARCH: ${{ inputs.arch_aarch64 && 'aarch64' || 'x86_64' }}
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 5G
       CCACHE_COMPILERCHECK: "none"
@@ -49,7 +50,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ env.DART_VERSION }}-${{ inputs.arch_aarch64 && 'aarch64' || 'x86_64' }}
+          key: ccache-${{ env.DART_VERSION }}-${{ env.ARCH }}
           restore-keys: ccache-${{ env.DART_VERSION }}-
 
       - name: Install dependencies
@@ -58,7 +59,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             cmake ninja-build git curl unzip \
             python3 python3-pip python3-pyelftools python3-requests \
-            libicu-dev libcapstone-dev ccache
+            libcapstone-dev ccache \
+            clang
 
       - name: Initialize CCache
         run: |
@@ -66,202 +68,22 @@ jobs:
           ccache -M ${{ env.CCACHE_MAXSIZE }}
           ccache -s
 
-      - name: Clone Dart SDK
-        if: steps.cache-dartsdk.outputs.cache-hit != 'true'
+      - name: Build blutter
         run: |
-          VERSION="${{ env.DART_VERSION }}"
-          mkdir -p dartsdk
-          cd dartsdk
-          rm -rf "v${VERSION}"
-          echo "Cloning Dart SDK (cache miss)..."
-          git clone -c advice.detachedHead=false \
-            -b "${VERSION}" --depth 1 \
-            --filter=blob:none --sparse \
-            https://github.com/dart-lang/sdk.git "v${VERSION}"
-          cd "v${VERSION}"
-          git sparse-checkout set runtime tools third_party/double-conversion
-          find . -maxdepth 1 -type f -delete
-
-      - name: Setup cross-compiler (aarch64 only)
-        if: inputs.arch_aarch64 == 'true'
-        run: |
-          echo "=== Setting up aarch64 cross-compiler ==="
-          sudo dpkg --add-architecture arm64 2>/dev/null || true
-          sudo apt-get update -qq || true
-          sudo apt-get install -y --no-install-recommends \
-            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
-            libicu-dev
-
-          # 从源码编译 arm64 ICU（apt arm64 仓库不可用）
-          echo "=== Building ICU for aarch64 ==="
-          ICU_VER="75.1"
-          wget -q "https://github.com/unicode-org/icu/releases/download/release-${ICU_VER}/icu4c-${ICU_VER//./_}-src.tgz"
-          tar xzf "icu4c-${ICU_VER//./_}-src.tgz"
-          cd icu/icu4c-${ICU_VER//./_}-source
-          mkdir build-arm64 && cd build-arm64
-          ../source/configure \
-            --host=aarch64-linux-gnu \
-            --prefix=/usr/aarch64-linux-gnu \
-            --disable-shared --enable-static \
-            --disable-samples --disable-tests
-          make -j$(nproc)
-          sudo make install
-          cd ../../..
-          rm -rf icu "icu4c-${ICU_VER//./_}-src.tgz"
-          echo "=== ICU for aarch64 installed ==="
-
-      - name: Generate toolchain file (aarch64 only)
-        if: inputs.arch_aarch64 == 'true'
-        run: |
-          mkdir -p cross
-          printf '%s\n' \
-            'set(CMAKE_SYSTEM_NAME Linux)' \
-            'set(CMAKE_SYSTEM_PROCESSOR aarch64)' \
-            '' \
-            'set(CMAKE_C_COMPILER   aarch64-linux-gnu-gcc)' \
-            'set(CMAKE_CXX_COMPILER aarch64-linux-gnu-g++)' \
-            'set(CMAKE_AR           aarch64-linux-gnu-ar)' \
-            'set(CMAKE_RANLIB       aarch64-linux-gnu-ranlib)' \
-            'set(CMAKE_STRIP        aarch64-linux-gnu-strip)' \
-            'set(CMAKE_OBJCOPY      aarch64-linux-gnu-objcopy)' \
-            'set(CMAKE_OBJDUMP      aarch64-linux-gnu-objdump)' \
-            'set(CMAKE_NM           aarch64-linux-gnu-nm)' \
-            'set(CMAKE_READELF      aarch64-linux-gnu-readelf)' \
-            '' \
-            'set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)' \
-            'set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)' \
-            'set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)' \
-            'set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)' \
-            '' \
-            'set(CMAKE_PREFIX_PATH "/usr/aarch64-linux-gnu")' \
-            > cross/aarch64-toolchain.cmake
-          echo "Toolchain file created: $(pwd)/cross/aarch64-toolchain.cmake"
-
-      - name: Generate version and source list
-        run: |
-          VERSION="${{ env.DART_VERSION }}"
-          cd "dartsdk/v${VERSION}"
-
-          # Generate version.cc
-          python3 tools/make_version.py --output runtime/vm/version.cc --input runtime/vm/version_in.cc
-
-          # Generate sourcelist.cmake
-          python3 ../../scripts/dartvm_create_srclist.py "$(pwd)"
-
-          # Detect C++ standard
-          STD=$(grep -oP '(?<=-std=c\+{2})\d+' runtime/tools/run_clang_tidy.dart | head -1)
-          STD=${STD:-17}
-          echo "CPP_STD=${STD}" >> $GITHUB_ENV
-
-          # Write CMakeLists.txt from template
-          sed -e "s/VERSION_PLACE_HOLDER/${VERSION}/g" \
-              -e "s/CXX_STD_PLACE_HOLDER/${STD}/g" \
-              ../../scripts/CMakeLists.txt > CMakeLists.txt
-
-          # Write Config.cmake.in
-          printf '@PACKAGE_INIT@\ninclude("${CMAKE_CURRENT_LIST_DIR}/dartvmTarget.cmake")\n' > Config.cmake.in
-
-      - name: Build Dart runtime
-        run: |
-          VERSION="${{ env.DART_VERSION }}"
-          cd "dartsdk/v${VERSION}"
-
-          mkdir -p ../../build/dartvm${VERSION}_android_arm64
-
-          if [ "${{ inputs.arch_aarch64 }}" = "true" ]; then
-            export CC="ccache aarch64-linux-gnu-gcc"
-            export CXX="ccache aarch64-linux-gnu-g++"
-            export PKG_CONFIG_PATH="/usr/aarch64-linux-gnu/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig"
-            TC="-DCMAKE_TOOLCHAIN_FILE=$GITHUB_WORKSPACE/cross/aarch64-toolchain.cmake -DICU_ROOT=/usr/aarch64-linux-gnu"
-          else
-            export CC="ccache gcc"
-            export CXX="ccache g++"
-            TC=""
-          fi
-
-          cmake -GNinja -B ../../build/dartvm${VERSION}_android_arm64 \
-            -DTARGET_OS=android \
-            -DTARGET_ARCH=arm64 \
-            -DCOMPRESSED_PTRS=1 \
-            -DCMAKE_BUILD_TYPE=Release \
-            --log-level=NOTICE \
-            -DCMAKE_INSTALL_PREFIX=../../packages \
-            ${TC} \
-            "$(pwd)"
-
-          ninja -C ../../build/dartvm${VERSION}_android_arm64
-          cmake --install ../../build/dartvm${VERSION}_android_arm64
-
-      - name: Detect compatibility macros
-        id: macros
-        run: |
-          VERSION="${{ env.DART_VERSION }}"
-          INC="../../packages/include/dartvm${VERSION}/vm"
-          MACROS=""
-
-          [ -f "$INC/class_id.h" ] && grep -q "V(LinkedHashMap)" "$INC/class_id.h" && MACROS="$MACROS -DOLD_MAP_SET_NAME=1"
-          [ -f "$INC/class_id.h" ] && ! grep -q "V(ImmutableLinkedHashMap)" "$INC/class_id.h" && MACROS="$MACROS -DOLD_MAP_NO_IMMUTABLE=1"
-          [ -f "$INC/class_id.h" ] && ! grep -q " kLastInternalOnlyCid " "$INC/class_id.h" && MACROS="$MACROS -DNO_LAST_INTERNAL_ONLY_CID=1"
-          [ -f "$INC/class_id.h" ] && grep -q "V(TypeRef)" "$INC/class_id.h" && MACROS="$MACROS -DHAS_TYPE_REF=1"
-          [[ "$VERSION" == 3.* ]] && [ -f "$INC/class_id.h" ] && grep -q "V(RecordType)" "$INC/class_id.h" && MACROS="$MACROS -DHAS_RECORD_TYPE=1"
-          [ -f "$INC/class_table.h" ] && grep -q "class SharedClassTable {" "$INC/class_table.h" && MACROS="$MACROS -DHAS_SHARED_CLASS_TABLE=1"
-          [ -f "$INC/stub_code_list.h" ] && ! grep -q "V(InitLateStaticField)" "$INC/stub_code_list.h" && MACROS="$MACROS -DNO_INIT_LATE_STATIC_FIELD=1"
-          [ -f "$INC/object_store.h" ] && ! grep -q "build_generic_method_extractor_code)" "$INC/object_store.h" && MACROS="$MACROS -DNO_METHOD_EXTRACTOR_STUB=1"
-          [ -f "$INC/object.h" ] && ! grep -q "AsTruncatedInt64Value()" "$INC/object.h" && MACROS="$MACROS -DUNIFORM_INTEGER_ACCESS=1"
-
-          echo "macros=${MACROS}" >> $GITHUB_OUTPUT
-
-      - name: Build blutter binary (${{ inputs.arch_aarch64 && 'aarch64' || 'x86_64' }})
-        run: |
-          VERSION="${{ env.DART_VERSION }}"
-          DARTLIB="dartvm${VERSION}_android_arm64"
-          BINNAME="blutter_${DARTLIB}"
-
-          if [ "${{ inputs.arch_aarch64 }}" = "true" ]; then
-            echo "=== Cross-compiling for aarch64 ==="
-            export PKG_CONFIG_PATH="/usr/aarch64-linux-gnu/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig"
-            export CC="ccache aarch64-linux-gnu-gcc"
-            export CXX="ccache aarch64-linux-gnu-g++"
-            TOOLCHAIN="$GITHUB_WORKSPACE/cross/aarch64-toolchain.cmake"
-          else
-            echo "=== Building native x86_64 ==="
-            export CC="ccache gcc"
-            export CXX="ccache g++"
-            TOOLCHAIN=""
-          fi
-
-          mkdir -p build/${BINNAME}
-
-          cmake -GNinja -B build/${BINNAME} \
-            -DDARTLIB="${DARTLIB}" \
-            -DNAME_SUFFIX="" \
-            -DCMAKE_BUILD_TYPE=Release \
-            --log-level=NOTICE \
-            $([ -n "$TOOLCHAIN" ] && echo "-DCMAKE_TOOLCHAIN_FILE=${TOOLCHAIN}") \
-            ${{ steps.macros.outputs.macros }} \
-            blutter
-
-          ninja -C build/${BINNAME}
-          cmake --install build/${BINNAME}
-
-          OUTPUT="bin/${BINNAME}"
-          [ -f "${OUTPUT}.exe" ] && mv "${OUTPUT}.exe" "${OUTPUT}"
-
-          echo "Built: ${OUTPUT}"
-          file "${OUTPUT}"
-          ccache -s
+          echo "Building blutter ${{ env.DART_VERSION }} for ${{ env.ARCH }}..."
+          python3 scripts/build.py "${{ env.DART_VERSION }}" --arch "${{ env.ARCH }}"
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
-          name: blutter-${{ env.DART_VERSION }}-${{ inputs.arch_aarch64 && 'aarch64' || 'x86_64' }}
+          name: blutter-${{ env.DART_VERSION }}-${{ env.ARCH }}
           path: bin/blutter_dartvm${{ env.DART_VERSION }}_android_arm64
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.DART_VERSION }}
-          name: blutter ${{ env.DART_VERSION }} (${{ inputs.arch_aarch64 && 'aarch64' || 'x86_64' }})
+          name: blutter ${{ env.DART_VERSION }} (${{ env.ARCH }})
           files: bin/blutter_dartvm${{ env.DART_VERSION }}_android_arm64
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
