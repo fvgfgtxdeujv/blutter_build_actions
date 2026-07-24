@@ -196,7 +196,7 @@ def build_dart_runtime(version, is_aarch64):
 
     if is_aarch64:
         tc_file = PROJECT_DIR / "cross" / "aarch64-toolchain.cmake"
-        env["PKG_CONFIG_PATH"] = "/usr/aarch64-linux-gnu/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig"
+        env["PKG_CONFIG_LIBDIR"] = "/usr/aarch64-linux-gnu/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig"
         cmake_args += [
             f"-DCMAKE_TOOLCHAIN_FILE={tc_file}",
             "-DICU_ROOT=/usr/aarch64-linux-gnu",
@@ -261,7 +261,7 @@ def build_blutter_binary(version, is_aarch64, macros):
 
     if is_aarch64:
         tc_file = PROJECT_DIR / "cross" / "aarch64-toolchain.cmake"
-        env["PKG_CONFIG_PATH"] = "/usr/aarch64-linux-gnu/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig"
+        env["PKG_CONFIG_LIBDIR"] = "/usr/aarch64-linux-gnu/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig"
         cmake_args += [f"-DCMAKE_TOOLCHAIN_FILE={tc_file}"]
 
     cmake_args.extend(macros)

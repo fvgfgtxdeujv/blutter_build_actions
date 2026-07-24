@@ -71,8 +71,11 @@ jobs:
       - name: Install aarch64 cross-compiler sysroot
         if: env.ARCH == 'aarch64'
         run: |
+          sudo dpkg --add-architecture arm64
+          sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+            libcapstone-dev:arm64
 
       - name: Setup ICU for aarch64
         if: env.ARCH == 'aarch64'
