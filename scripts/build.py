@@ -70,10 +70,13 @@ def setup_cross_compiler():
 
     run(["sudo", "cp", "-a", "/tmp/icu-arm64-dev/usr/include/unicode",
          f"{target_dir}/include/"])
-    run(["sudo", "cp", "-a", "/tmp/icu-arm64-dev/usr/lib/aarch64-linux-gnu/libicu*",
-         f"{target_dir}/lib/"])
-    run(["sudo", "cp", "-a", "/tmp/icu-arm64-lib/usr/lib/aarch64-linux-gnu/libicu*",
-         f"{target_dir}/lib/"])
+
+    dev_lib = Path("/tmp/icu-arm64-dev/usr/lib/aarch64-linux-gnu")
+    for f in sorted(dev_lib.glob("libicu*")):
+        run(["sudo", "cp", "-a", str(f), f"{target_dir}/lib/"])
+    runtime_lib = Path("/tmp/icu-arm64-lib/usr/lib/aarch64-linux-gnu")
+    for f in sorted(runtime_lib.glob("libicu*")):
+        run(["sudo", "cp", "-a", str(f), f"{target_dir}/lib/"])
     run(["sudo", "ln", "-sf", f"{target_dir}/lib", f"{target_dir}/lib64"])
     run(["rm", "-rf", "/tmp/icu-arm64-dev", "/tmp/icu-arm64-lib",
          f"/tmp/{icu_dev_deb}", f"/tmp/{icu_lib_deb}"])
