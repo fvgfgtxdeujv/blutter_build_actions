@@ -46,14 +46,14 @@ def setup_aarch64_sysroot():
 
     _install_arm64_deb_to_sysroot(
         pkg="libicu-dev",
-        base_url="http://ports.ubuntu.com/ubuntu-ports/pool/main/i/icu",
+        base_url="https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/pool/main/i/icu",
         lib_name="icu",
         include_dirs=["unicode"],
         runtime_pkg_prefix="libicu",
     )
     _install_arm64_deb_to_sysroot(
         pkg="libcapstone-dev",
-        base_url="http://ports.ubuntu.com/ubuntu-ports/pool/main/c/capstone",
+        base_url="https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/pool/main/c/capstone",
         lib_name="capstone",
         include_dirs=["capstone"],
         runtime_pkg="libcapstone5",
