@@ -188,26 +188,19 @@ def build_dart_runtime(version, is_aarch64):
         "--log-level=NOTICE",
         f"-DCMAKE_INSTALL_PREFIX={PROJECT_DIR / 'packages'}",
         str(clone_dir),
+        "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
+        "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
     ]
+
+    env = os.environ.copy()
 
     if is_aarch64:
         tc_file = PROJECT_DIR / "cross" / "aarch64-toolchain.cmake"
-        env = {
-            **os.environ,
-            "CC": "ccache clang",
-            "CXX": "ccache clang++",
-            "PKG_CONFIG_PATH": "/usr/aarch64-linux-gnu/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig",
-        }
+        env["PKG_CONFIG_PATH"] = "/usr/aarch64-linux-gnu/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig"
         cmake_args += [
             f"-DCMAKE_TOOLCHAIN_FILE={tc_file}",
             "-DICU_ROOT=/usr/aarch64-linux-gnu",
         ]
-    else:
-        env = {
-            **os.environ,
-            "CC": "ccache clang",
-            "CXX": "ccache clang++",
-        }
 
     run(cmake_args, env=env)
     run([NINJA_CMD], cwd=build_path, env=env)
@@ -260,23 +253,16 @@ def build_blutter_binary(version, is_aarch64, macros):
         f"-DDARTLIB={dart_lib}", "-DNAME_SUFFIX=",
         "-DCMAKE_BUILD_TYPE=Release", "--log-level=NOTICE",
         str(PROJECT_DIR / "blutter"),
+        "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
+        "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
     ]
+
+    env = os.environ.copy()
 
     if is_aarch64:
         tc_file = PROJECT_DIR / "cross" / "aarch64-toolchain.cmake"
-        env = {
-            **os.environ,
-            "CC": "ccache clang",
-            "CXX": "ccache clang++",
-            "PKG_CONFIG_PATH": "/usr/aarch64-linux-gnu/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig",
-        }
+        env["PKG_CONFIG_PATH"] = "/usr/aarch64-linux-gnu/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig"
         cmake_args += [f"-DCMAKE_TOOLCHAIN_FILE={tc_file}"]
-    else:
-        env = {
-            **os.environ,
-            "CC": "ccache clang",
-            "CXX": "ccache clang++",
-        }
 
     cmake_args.extend(macros)
 
