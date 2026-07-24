@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-Cross-compile blutter for ARM64 (Android)
+Build blutter for ARM64 / x86_64
 Called from GitHub Actions workflow
 """
 import os
 import sys
+import platform
 import subprocess
 import shutil
 import tempfile
@@ -27,6 +28,16 @@ BIN_DIR = PROJECT_DIR / "bin"
 CMAKE_TEMPLATE = SCRIPT_DIR / "CMakeLists.txt"
 CREATE_SRCLIST = SCRIPT_DIR / "dartvm_create_srclist.py"
 DART_GIT_URL = "https://github.com/dart-lang/sdk.git"
+
+HOST_MACHINE = platform.machine()
+
+
+def is_cross_compile(arch):
+    if arch == "aarch64":
+        return HOST_MACHINE != "aarch64"
+    if arch == "x86_64":
+        return HOST_MACHINE not in ("x86_64", "amd64")
+    return False
 
 
 def run(cmd, **kwargs):
@@ -220,9 +231,9 @@ def _dart_lib_name(version, arch):
 
 def build_dart_runtime(version, arch):
     """Build Dart runtime static library"""
-    is_aarch64 = arch == "aarch64"
+    cross = is_cross_compile(arch)
     a = ARCH_MAP[arch]
-    print(f"[*] Building Dart runtime (target={a['os']}/{a['arch']}, cross={is_aarch64})...")
+    print(f"[*] Building Dart runtime (target={a['os']}/{a['arch']}, cross={cross})...")
     clone_dir = SDK_DIR / f"v{version}"
     dart_lib_name = _dart_lib_name(version, arch)
     build_path = BUILD_DIR / dart_lib_name
@@ -243,7 +254,7 @@ def build_dart_runtime(version, arch):
 
     env = os.environ.copy()
 
-    if is_aarch64:
+    if cross:
         tc_file = PROJECT_DIR / "cross" / "aarch64-toolchain.cmake"
         env["PKG_CONFIG_LIBDIR"] = "/usr/aarch64-linux-gnu/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig"
         cmake_args += [
@@ -291,9 +302,9 @@ def detect_macros(version):
 
 def build_blutter_binary(version, arch, macros):
     """Build blutter executable"""
-    is_aarch64 = arch == "aarch64"
+    cross = is_cross_compile(arch)
     dart_lib = _dart_lib_name(version, arch)
-    print(f"[*] Building blutter binary (arch={arch}, cross={is_aarch64})...")
+    print(f"[*] Building blutter binary (arch={arch}, cross={cross})...")
     bin_name = f"blutter_{dart_lib}"
     build_path = BUILD_DIR / bin_name
     build_path.mkdir(parents=True, exist_ok=True)
@@ -309,7 +320,7 @@ def build_blutter_binary(version, arch, macros):
 
     env = os.environ.copy()
 
-    if is_aarch64:
+    if cross:
         tc_file = PROJECT_DIR / "cross" / "aarch64-toolchain.cmake"
         env["PKG_CONFIG_LIBDIR"] = "/usr/aarch64-linux-gnu/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig"
         cmake_args += [f"-DCMAKE_TOOLCHAIN_FILE={tc_file}"]
