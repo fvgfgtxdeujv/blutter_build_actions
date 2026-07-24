@@ -48,26 +48,21 @@ def setup_cross_compiler():
     run(["sudo", "apt-get", "install", "-y", "--no-install-recommends",
          "clang", "libcapstone-dev", "ccache", "wget", "gcc-aarch64-linux-gnu"])
 
-    # Extract ICU arm64 libraries to sysroot
+    # Extract ICU arm64 libraries to sysroot from Ubuntu ports
     print("[*] Extracting ICU arm64 dev libraries to sysroot...")
-    run(["sudo", "dpkg", "--add-architecture", "arm64"])
+    icu_ver = subprocess.run(
+        ["dpkg-query", "-W", "-f=${Version}", "libicu-dev"],
+        capture_output=True, text=True
+    ).stdout.strip()
 
-    # Add ports.ubuntu.com as arm64 source (standard mirrors lack arm64)
-    ports_sources = (
-        "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main universe\n"
-        "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main universe\n"
-        "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-security main universe\n"
-    )
-    with open("/tmp/arm64-ports.list", "w") as f:
-        f.write(ports_sources)
-    run(["sudo", "mv", "/tmp/arm64-ports.list", "/etc/apt/sources.list.d/arm64-ports.list"])
+    base_url = "http://ports.ubuntu.com/ubuntu-ports/pool/main/i/icu"
+    icu_dev_deb = f"libicu-dev_{icu_ver}_arm64.deb"
+    icu_lib_deb = f"libicu{icu_ver.split('.')[0]}_{icu_ver}_arm64.deb"
 
-    run(["sudo", "apt-get", "update", "-qq"])
-    run(["apt-get", "download", "libicu-dev:arm64"])
+    run(["wget", "-q", f"{base_url}/{icu_dev_deb}", "-O", f"/tmp/{icu_dev_deb}"])
+    run(["wget", "-q", f"{base_url}/{icu_lib_deb}", "-O", f"/tmp/{icu_lib_deb}"])
 
-    icu_deb = next(Path().glob("libicu-dev_*_arm64.deb"))
-    run(["dpkg", "-x", str(icu_deb), "/tmp/icu-arm64"])
-    icu_deb.unlink()
+    run(["dpkg", "-x", f"/tmp/{icu_dev_deb}", "/tmp/icu-arm64"])
 
     target_dir = "/usr/aarch64-linux-gnu"
     run(["sudo", "mkdir", "-p", f"{target_dir}/include", f"{target_dir}/lib"])
@@ -77,8 +72,8 @@ def setup_cross_compiler():
     run(["sudo", "cp", "-a", "/tmp/icu-arm64/usr/lib/aarch64-linux-gnu/libicu*",
          f"{target_dir}/lib/"])
     run(["sudo", "ln", "-sf", f"{target_dir}/lib", f"{target_dir}/lib64"])
-    run(["rm", "-rf", "/tmp/icu-arm64"])
-    print(f"[+] ICU for aarch64 installed to {target_dir}")
+    run(["rm", "-rf", "/tmp/icu-arm64", f"/tmp/{icu_dev_deb}", f"/tmp/{icu_lib_deb}"])
+    print(f"[+] ICU {icu_ver} for aarch64 installed to {target_dir}")
 
 
 def generate_toolchain_file():
