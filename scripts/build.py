@@ -52,7 +52,7 @@ def setup_cross_compiler():
     print("[*] Building ICU for aarch64 (this takes ~2 min)...")
     icu_ver = "75.1"
     icu_archive = f"icu4c-{icu_ver.replace('.', '_')}-src.tgz"
-    icu_url = f"https://github.com/unicode-org/icu/releases/download/release-{icu_ver}/{icu_archive}"
+    icu_url = f"https://github.com/unicode-org/icu/releases/download/release-{icu_ver.replace('.', '-')}/{icu_archive}"
 
     run(["wget", "-q", icu_url])
     run(["tar", "xzf", icu_archive])
