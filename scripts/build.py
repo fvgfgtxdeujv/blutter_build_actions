@@ -51,6 +51,17 @@ def setup_cross_compiler():
     # Extract ICU arm64 libraries to sysroot
     print("[*] Extracting ICU arm64 dev libraries to sysroot...")
     run(["sudo", "dpkg", "--add-architecture", "arm64"])
+
+    # Add ports.ubuntu.com as arm64 source (standard mirrors lack arm64)
+    ports_sources = (
+        "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main universe\n"
+        "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main universe\n"
+        "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-security main universe\n"
+    )
+    with open("/tmp/arm64-ports.list", "w") as f:
+        f.write(ports_sources)
+    run(["sudo", "mv", "/tmp/arm64-ports.list", "/etc/apt/sources.list.d/arm64-ports.list"])
+
     run(["sudo", "apt-get", "update", "-qq"])
     run(["apt-get", "download", "libicu-dev:arm64"])
 
