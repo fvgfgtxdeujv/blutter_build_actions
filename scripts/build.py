@@ -89,12 +89,12 @@ def generate_toolchain_file():
     content = f"""set(CMAKE_SYSTEM_NAME Linux)
 set(CMAKE_SYSTEM_PROCESSOR aarch64)
 
-set(CMAKE_SYSROOT /usr/aarch64-linux-gnu)
-
 set(CMAKE_C_COMPILER clang)
 set(CMAKE_CXX_COMPILER clang++)
 set(CMAKE_C_COMPILER_TARGET aarch64-linux-gnu)
 set(CMAKE_CXX_COMPILER_TARGET aarch64-linux-gnu)
+set(CMAKE_C_COMPILER_EXTERNAL_TOOLCHAIN /usr)
+set(CMAKE_CXX_COMPILER_EXTERNAL_TOOLCHAIN /usr)
 
 set(CMAKE_AR llvm-ar)
 set(CMAKE_RANLIB llvm-ranlib)

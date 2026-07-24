@@ -68,10 +68,11 @@ jobs:
             python3 python3-pip python3-pyelftools python3-requests \
             libcapstone-dev ccache clang
 
-      - name: Install aarch64 cross-compiler toolchain
+      - name: Install aarch64 cross-compiler sysroot
         if: env.ARCH == 'aarch64'
         run: |
-          sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu
+          sudo apt-get install -y --no-install-recommends \
+            gcc-aarch64-linux-gnu libc6-dev-arm64-cross
 
       - name: Setup ICU for aarch64
         if: env.ARCH == 'aarch64'
