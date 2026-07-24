@@ -58,7 +58,7 @@ def setup_cross_compiler():
     base_url = "http://ports.ubuntu.com/ubuntu-ports/pool/main/i/icu"
     icu_dev_deb = f"libicu-dev_{icu_ver}_arm64.deb"
     icu_lib_deb = f"libicu{icu_ver.split('.')[0]}_{icu_ver}_arm64.deb"
-    deps_dir = SCRIPT_DIR.parent / "deps"
+    deps_dir = SCRIPT_DIR.parent
 
     for deb_name in (icu_dev_deb, icu_lib_deb):
         local = deps_dir / deb_name
