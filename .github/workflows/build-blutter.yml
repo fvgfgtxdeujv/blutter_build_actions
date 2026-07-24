@@ -44,7 +44,7 @@ jobs:
             echo "ARCH_SUFFIX=android_arm64" >> $GITHUB_ENV
           else
             echo "ARCH=x86_64" >> $GITHUB_ENV
-            echo "ARCH_SUFFIX=android_x64" >> $GITHUB_ENV
+            echo "ARCH_SUFFIX=linux_x64" >> $GITHUB_ENV
           fi
 
       - name: Restore Dart SDK cache

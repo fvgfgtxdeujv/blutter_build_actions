@@ -205,7 +205,7 @@ def generate_sources(version):
 
 ARCH_MAP = {
     "aarch64": {"os": "android", "arch": "arm64", "compressed_ptrs": True},
-    "x86_64":  {"os": "android", "arch": "x64",   "compressed_ptrs": False},
+    "x86_64":  {"os": "linux",   "arch": "x64",   "compressed_ptrs": False},
 }
 
 

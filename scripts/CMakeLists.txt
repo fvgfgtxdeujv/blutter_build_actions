@@ -26,9 +26,6 @@ string(SUBSTRING ${PROJECT_NAME} 6 -1 DART_VERSION)
 if (NOT DEFINED TARGET_OS)
 	set(TARGET_OS "android")
 endif()
-if (NOT "${TARGET_OS}" MATCHES "^(android|ios)$")
-	message(FATAL_ERROR "Only android or ios platform")
-endif()
 
 if (NOT DEFINED TARGET_ARCH)
 	set(TARGET_ARCH "arm64")
@@ -57,8 +54,8 @@ set_target_properties(${LIBNAME} PROPERTIES
 # DART_TARGET_OS_ANDROID or DART_TARGET_OS_MACOS_IOS
 if (${TARGET_OS} STREQUAL "android")
 	set(target_os "DART_TARGET_OS_ANDROID")
-	# Note: DART_COMPRESSED_POINTERS should be from the binary
-	#set(dart_pointers "DART_COMPRESSED_POINTERS")
+elseif (${TARGET_OS} STREQUAL "linux")
+	set(target_os "DART_TARGET_OS_LINUX")
 else()
 	set(target_os "DART_TARGET_OS_MACOS_IOS")
 endif()
