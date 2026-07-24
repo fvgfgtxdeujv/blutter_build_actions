@@ -65,7 +65,7 @@ def _install_arm64_deb_to_sysroot(pkg, base_url, lib_name, include_dirs,
                                    runtime_pkg=None, runtime_pkg_prefix=None):
     print(f"[*] Installing {pkg}:arm64 to sysroot...")
     ver = subprocess.run(
-        ["dpkg-query", "-W", "-f=${{Version}}", pkg],
+        ["dpkg-query", "-W", "-f=${Version}", pkg],
         capture_output=True, text=True
     ).stdout.strip()
 
