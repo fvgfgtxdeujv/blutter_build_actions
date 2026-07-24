@@ -67,7 +67,7 @@ def setup_cross_compiler():
     target_dir = "/usr/aarch64-linux-gnu"
     run(["sudo", "mkdir", "-p", f"{target_dir}/include", f"{target_dir}/lib"])
 
-    run(["sudo", "cp", "-a", "/tmp/icu-arm64/usr/include/aarch64-linux-gnu/unicode",
+    run(["sudo", "cp", "-a", "/tmp/icu-arm64/usr/include/unicode",
          f"{target_dir}/include/"])
     run(["sudo", "cp", "-a", "/tmp/icu-arm64/usr/lib/aarch64-linux-gnu/libicu*",
          f"{target_dir}/lib/"])
