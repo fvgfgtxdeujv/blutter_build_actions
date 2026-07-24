@@ -62,10 +62,8 @@ def setup_cross_compiler():
     build_dir.mkdir(parents=True, exist_ok=True)
 
     env = {**os.environ,
-           "CC": "clang",
-           "CXX": "clang++",
-           "CFLAGS": "--target=aarch64-linux-gnu",
-           "CXXFLAGS": "--target=aarch64-linux-gnu"}
+           "CC": "aarch64-linux-gnu-gcc",
+           "CXX": "aarch64-linux-gnu-g++"}
 
     run(["../source/configure",
          "--host=aarch64-linux-gnu",
