@@ -62,17 +62,21 @@ def setup_cross_compiler():
     run(["wget", "-q", f"{base_url}/{icu_dev_deb}", "-O", f"/tmp/{icu_dev_deb}"])
     run(["wget", "-q", f"{base_url}/{icu_lib_deb}", "-O", f"/tmp/{icu_lib_deb}"])
 
-    run(["dpkg", "-x", f"/tmp/{icu_dev_deb}", "/tmp/icu-arm64"])
+    run(["dpkg", "-x", f"/tmp/{icu_dev_deb}", "/tmp/icu-arm64-dev"])
+    run(["dpkg", "-x", f"/tmp/{icu_lib_deb}", "/tmp/icu-arm64-lib"])
 
     target_dir = "/usr/aarch64-linux-gnu"
     run(["sudo", "mkdir", "-p", f"{target_dir}/include", f"{target_dir}/lib"])
 
-    run(["sudo", "cp", "-a", "/tmp/icu-arm64/usr/include/unicode",
+    run(["sudo", "cp", "-a", "/tmp/icu-arm64-dev/usr/include/unicode",
          f"{target_dir}/include/"])
-    run(["sudo", "cp", "-a", "/tmp/icu-arm64/usr/lib/aarch64-linux-gnu/libicu*",
+    run(["sudo", "cp", "-a", "/tmp/icu-arm64-dev/usr/lib/aarch64-linux-gnu/libicu*",
+         f"{target_dir}/lib/"])
+    run(["sudo", "cp", "-a", "/tmp/icu-arm64-lib/usr/lib/aarch64-linux-gnu/libicu*",
          f"{target_dir}/lib/"])
     run(["sudo", "ln", "-sf", f"{target_dir}/lib", f"{target_dir}/lib64"])
-    run(["rm", "-rf", "/tmp/icu-arm64", f"/tmp/{icu_dev_deb}", f"/tmp/{icu_lib_deb}"])
+    run(["rm", "-rf", "/tmp/icu-arm64-dev", "/tmp/icu-arm64-lib",
+         f"/tmp/{icu_dev_deb}", f"/tmp/{icu_lib_deb}"])
     print(f"[+] ICU {icu_ver} for aarch64 installed to {target_dir}")
 
 
