@@ -6,43 +6,32 @@ on:
       dart_version:
         description: 'Dart version (e.g. 3.3.4, 3.4.2, 3.5.2)'
         required: true
-      arch_x86_64:
-        description: 'Build for x86_64 (Linux native)'
-        required: false
-        type: boolean
-        default: false
-      arch_aarch64:
-        description: 'Build for aarch64 (Android ARM64, cross-compile)'
-        required: false
-        type: boolean
-        default: true
 
 permissions:
   contents: write
 
 jobs:
   build:
-    name: Build
+    name: Build (${{ matrix.arch }})
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [aarch64, x86_64]
+        include:
+          - arch: aarch64
+            suffix: android_arm64
+          - arch: x86_64
+            suffix: linux_x64
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 5G
       CCACHE_COMPILERCHECK: "none"
       CCACHE_NOHASHDIR: "true"
       CCACHE_NOHARDLINK: "true"
+      DART_VERSION: ${{ inputs.dart_version || '3.3.4' }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set build parameters
-        run: |
-          echo "DART_VERSION=${{ inputs.dart_version || '3.3.4' }}" >> $GITHUB_ENV
-          if [ "${{ inputs.arch_aarch64 || 'true' }}" = "true" ]; then
-            echo "ARCH=aarch64" >> $GITHUB_ENV
-            echo "ARCH_SUFFIX=android_arm64" >> $GITHUB_ENV
-          else
-            echo "ARCH=x86_64" >> $GITHUB_ENV
-            echo "ARCH_SUFFIX=linux_x64" >> $GITHUB_ENV
-          fi
 
       - name: Restore Dart SDK cache
         id: cache-dartsdk
@@ -56,7 +45,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ env.DART_VERSION }}-${{ env.ARCH }}
+          key: ccache-${{ env.DART_VERSION }}-${{ matrix.arch }}
           restore-keys: ccache-${{ env.DART_VERSION }}-
 
       - name: Install dependencies
@@ -68,7 +57,7 @@ jobs:
             libcapstone-dev ccache clang llvm
 
       - name: Install aarch64 cross-compiler sysroot
-        if: env.ARCH == 'aarch64'
+        if: matrix.arch == 'aarch64'
         run: |
           sudo dpkg --add-architecture arm64
           sudo sed -i '/^Types: deb$/a Architectures: amd64' /etc/apt/sources.list.d/ubuntu.sources
@@ -87,11 +76,11 @@ jobs:
             libcapstone-dev:arm64
 
       - name: Setup ICU for aarch64
-        if: env.ARCH == 'aarch64'
+        if: matrix.arch == 'aarch64'
         run: python3 scripts/build.py setup-icu
 
       - name: Generate CMake toolchain
-        if: env.ARCH == 'aarch64'
+        if: matrix.arch == 'aarch64'
         run: python3 scripts/build.py generate-toolchain
 
       - name: Initialize CCache
@@ -107,22 +96,43 @@ jobs:
         run: python3 scripts/build.py generate-sources "${{ env.DART_VERSION }}"
 
       - name: Build Dart VM
-        run: python3 scripts/build.py build-dartvm "${{ env.DART_VERSION }}" --arch "${{ env.ARCH }}"
+        run: python3 scripts/build.py build-dartvm "${{ env.DART_VERSION }}" --arch "${{ matrix.arch }}"
 
       - name: Build blutter
-        run: python3 scripts/build.py build-blutter "${{ env.DART_VERSION }}" --arch "${{ env.ARCH }}"
+        run: python3 scripts/build.py build-blutter "${{ env.DART_VERSION }}" --arch "${{ matrix.arch }}"
 
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
-          name: blutter-${{ env.DART_VERSION }}-${{ env.ARCH }}
-          path: bin/blutter_dartvm${{ env.DART_VERSION }}_${{ env.ARCH_SUFFIX }}
+          name: blutter-${{ env.DART_VERSION }}-${{ matrix.arch }}
+          path: bin/blutter_dartvm${{ env.DART_VERSION }}_${{ matrix.suffix }}
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-24.04
+    env:
+      DART_VERSION: ${{ inputs.dart_version || '3.3.4' }}
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: blutter-${{ env.DART_VERSION }}-*
+          path: bin/
+
+      - name: Flatten artifact directories
+        run: |
+          find bin -type f | while read f; do
+            mv "$f" bin/
+          done
+          find bin -type d -empty -delete
+          ls -la bin/
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.DART_VERSION }}
-          name: blutter ${{ env.DART_VERSION }} (${{ env.ARCH }})
-          files: bin/blutter_dartvm${{ env.DART_VERSION }}_${{ env.ARCH_SUFFIX }}
+          name: blutter ${{ env.DART_VERSION }}
+          files: bin/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
