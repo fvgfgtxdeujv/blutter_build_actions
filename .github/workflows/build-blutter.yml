@@ -71,12 +71,25 @@ jobs:
       - name: Install aarch64 cross-compiler sysroot
         if: env.ARCH == 'aarch64'
         run: |
-          sudo apt-get install -y --no-install-recommends \
-            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          sudo dpkg --add-architecture arm64
+          sudo sed -i '/^Types: deb$/a Architectures: amd64' /etc/apt/sources.list.d/ubuntu.sources
+          sudo tee -a /etc/apt/sources.list.d/ubuntu.sources <<'EOF'
 
-      - name: Setup aarch64 sysroot libs (ICU + capstone)
+          Types: deb
+          URIs: https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/
+          Suites: noble noble-updates noble-security
+          Components: main universe
+          Architectures: arm64
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          EOF
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+            libcapstone-dev:arm64
+
+      - name: Setup ICU for aarch64
         if: env.ARCH == 'aarch64'
-        run: python3 scripts/build.py setup-aarch64-sysroot
+        run: python3 scripts/build.py setup-icu
 
       - name: Generate CMake toolchain
         if: env.ARCH == 'aarch64'

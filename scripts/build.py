@@ -39,8 +39,20 @@ def run(cmd, **kwargs):
     return result
 
 
-def setup_aarch64_sysroot():
-    """Install ICU and capstone arm64 libs to cross-compilation sysroot"""
+def setup_icu():
+    """Install ICU arm64 libs: try apt first, fallback to local .deb"""
+    print("[*] Installing libicu-dev:arm64...")
+
+    result = subprocess.run(
+        ["sudo", "apt-get", "install", "-y", "--no-install-recommends",
+         "libicu-dev:arm64"],
+        capture_output=True
+    )
+    if result.returncode == 0:
+        print("[+] libicu-dev:arm64 installed via apt")
+        return
+
+    print("[!] apt install failed, falling back to local .deb download")
     target_dir = "/usr/aarch64-linux-gnu"
     run(["sudo", "mkdir", "-p", f"{target_dir}/include", f"{target_dir}/lib"])
 
@@ -51,14 +63,7 @@ def setup_aarch64_sysroot():
         include_dirs=["unicode"],
         runtime_pkg_prefix="libicu",
     )
-    _install_arm64_deb_to_sysroot(
-        pkg="libcapstone-dev",
-        base_url="https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/pool/main/c/capstone",
-        lib_name="capstone",
-        include_dirs=["capstone"],
-        runtime_pkg="libcapstone5",
-    )
-    print(f"[+] ARM64 sysroot libs installed to {target_dir}")
+    print(f"[+] ICU libs installed to {target_dir}")
 
 
 def _install_arm64_deb_to_sysroot(pkg, base_url, lib_name, include_dirs,
@@ -308,7 +313,7 @@ def main():
     parser = argparse.ArgumentParser(description="Build blutter")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("setup-aarch64-sysroot")
+    p = sub.add_parser("setup-icu")
     p = sub.add_parser("generate-toolchain")
     p = sub.add_parser("clone-dart")
     p.add_argument("version")
@@ -323,8 +328,8 @@ def main():
 
     args = parser.parse_args()
 
-    if args.command == "setup-aarch64-sysroot":
-        setup_aarch64_sysroot()
+    if args.command == "setup-icu":
+        setup_icu()
     elif args.command == "generate-toolchain":
         generate_toolchain_file()
     elif args.command == "clone-dart":
