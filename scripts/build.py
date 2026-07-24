@@ -39,45 +39,71 @@ def run(cmd, **kwargs):
     return result
 
 
-def setup_icu():
-    """Extract ICU arm64 libraries to sysroot from Ubuntu ports"""
-    print("[*] Extracting ICU arm64 dev libraries to sysroot...")
-    icu_ver = subprocess.run(
-        ["dpkg-query", "-W", "-f=${Version}", "libicu-dev"],
+def setup_aarch64_sysroot():
+    """Install ICU and capstone arm64 libs to cross-compilation sysroot"""
+    target_dir = "/usr/aarch64-linux-gnu"
+    run(["sudo", "mkdir", "-p", f"{target_dir}/include", f"{target_dir}/lib"])
+
+    _install_arm64_deb_to_sysroot(
+        pkg="libicu-dev",
+        base_url="http://ports.ubuntu.com/ubuntu-ports/pool/main/i/icu",
+        lib_name="icu",
+        include_dirs=["unicode"],
+        runtime_pkg_prefix="libicu",
+    )
+    _install_arm64_deb_to_sysroot(
+        pkg="libcapstone-dev",
+        base_url="http://ports.ubuntu.com/ubuntu-ports/pool/main/c/capstone",
+        lib_name="capstone",
+        include_dirs=["capstone"],
+        runtime_pkg="libcapstone5",
+    )
+    print(f"[+] ARM64 sysroot libs installed to {target_dir}")
+
+
+def _install_arm64_deb_to_sysroot(pkg, base_url, lib_name, include_dirs,
+                                   runtime_pkg=None, runtime_pkg_prefix=None):
+    print(f"[*] Installing {pkg}:arm64 to sysroot...")
+    ver = subprocess.run(
+        ["dpkg-query", "-W", "-f=${{Version}}", pkg],
         capture_output=True, text=True
     ).stdout.strip()
 
-    base_url = "http://ports.ubuntu.com/ubuntu-ports/pool/main/i/icu"
-    icu_dev_deb = f"libicu-dev_{icu_ver}_arm64.deb"
-    icu_lib_deb = f"libicu{icu_ver.split('.')[0]}_{icu_ver}_arm64.deb"
-    deps_dir = PROJECT_DIR
+    target = "/usr/aarch64-linux-gnu"
+    deb_files = [f"{pkg}_{ver}_arm64.deb"]
 
-    for deb_name in (icu_dev_deb, icu_lib_deb):
-        local = deps_dir / deb_name
+    if runtime_pkg:
+        deb_files.append(f"{runtime_pkg}_{ver}_arm64.deb")
+    elif runtime_pkg_prefix:
+        major = ver.split(".")[0]
+        deb_files.append(f"{runtime_pkg_prefix}{major}_{ver}_arm64.deb")
+
+    for deb_name in deb_files:
+        local = PROJECT_DIR / deb_name
         if local.exists():
             run(["cp", str(local), f"/tmp/{deb_name}"])
         else:
             run(["wget", "-q", f"{base_url}/{deb_name}", "-O", f"/tmp/{deb_name}"])
 
-    run(["dpkg", "-x", f"/tmp/{icu_dev_deb}", "/tmp/icu-arm64-dev"])
-    run(["dpkg", "-x", f"/tmp/{icu_lib_deb}", "/tmp/icu-arm64-lib"])
+    extract_dir = f"/tmp/{lib_name}-arm64-dev"
+    run(["dpkg", "-x", f"/tmp/{deb_files[0]}", extract_dir])
 
-    target_dir = "/usr/aarch64-linux-gnu"
-    run(["sudo", "mkdir", "-p", f"{target_dir}/include", f"{target_dir}/lib"])
+    for d in include_dirs:
+        run(["sudo", "cp", "-a", f"{extract_dir}/usr/include/{d}", f"{target}/include/"])
 
-    run(["sudo", "cp", "-a", "/tmp/icu-arm64-dev/usr/include/unicode",
-         f"{target_dir}/include/"])
+    dev_lib = Path(extract_dir) / "usr" / "lib" / "aarch64-linux-gnu"
+    if dev_lib.exists():
+        for f in dev_lib.glob(f"lib{lib_name}*"):
+            run(["sudo", "cp", "-a", str(f), f"{target}/lib/"])
 
-    dev_lib = Path("/tmp/icu-arm64-dev/usr/lib/aarch64-linux-gnu")
-    for f in sorted(dev_lib.glob("libicu*")):
-        run(["sudo", "cp", "-a", str(f), f"{target_dir}/lib/"])
-    runtime_lib = Path("/tmp/icu-arm64-lib/usr/lib/aarch64-linux-gnu")
-    for f in sorted(runtime_lib.glob("libicu*")):
-        run(["sudo", "cp", "-a", str(f), f"{target_dir}/lib/"])
-    run(["sudo", "ln", "-sf", f"{target_dir}/lib", f"{target_dir}/lib64"])
-    run(["rm", "-rf", "/tmp/icu-arm64-dev", "/tmp/icu-arm64-lib",
-         f"/tmp/{icu_dev_deb}", f"/tmp/{icu_lib_deb}"])
-    print(f"[+] ICU {icu_ver} for aarch64 installed to {target_dir}")
+    for deb_name in deb_files[1:]:
+        run(["dpkg", "-x", f"/tmp/{deb_name}", extract_dir])
+        rt_lib = Path(extract_dir) / "usr" / "lib" / "aarch64-linux-gnu"
+        if rt_lib.exists():
+            for f in rt_lib.glob(f"lib{lib_name}*"):
+                run(["sudo", "cp", "-a", str(f), f"{target}/lib/"])
+
+    run(["rm", "-rf", extract_dir, *[f"/tmp/{d}" for d in deb_files]])
 
 
 def generate_toolchain_file():
@@ -282,7 +308,7 @@ def main():
     parser = argparse.ArgumentParser(description="Build blutter")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("setup-icu")
+    p = sub.add_parser("setup-aarch64-sysroot")
     p = sub.add_parser("generate-toolchain")
     p = sub.add_parser("clone-dart")
     p.add_argument("version")
@@ -297,8 +323,8 @@ def main():
 
     args = parser.parse_args()
 
-    if args.command == "setup-icu":
-        setup_icu()
+    if args.command == "setup-aarch64-sysroot":
+        setup_aarch64_sysroot()
     elif args.command == "generate-toolchain":
         generate_toolchain_file()
     elif args.command == "clone-dart":

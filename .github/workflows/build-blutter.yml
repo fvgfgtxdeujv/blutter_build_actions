@@ -71,15 +71,12 @@ jobs:
       - name: Install aarch64 cross-compiler sysroot
         if: env.ARCH == 'aarch64'
         run: |
-          sudo dpkg --add-architecture arm64
-          sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
-            libcapstone-dev:arm64
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
-      - name: Setup ICU for aarch64
+      - name: Setup aarch64 sysroot libs (ICU + capstone)
         if: env.ARCH == 'aarch64'
-        run: python3 scripts/build.py setup-icu
+        run: python3 scripts/build.py setup-aarch64-sysroot
 
       - name: Generate CMake toolchain
         if: env.ARCH == 'aarch64'
