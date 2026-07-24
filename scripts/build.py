@@ -46,7 +46,7 @@ def setup_cross_compiler():
     # Install clang
     run(["sudo", "apt-get", "update", "-qq"])
     run(["sudo", "apt-get", "install", "-y", "--no-install-recommends",
-         "clang", "libcapstone-dev", "ccache", "wget"])
+         "clang", "libcapstone-dev", "ccache", "wget", "gcc-aarch64-linux-gnu"])
 
     # Build ICU from source for aarch64
     print("[*] Building ICU for aarch64 (this takes ~2 min)...")
