@@ -64,10 +64,22 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            cmake ninja-build git curl unzip \
+            cmake ninja-build git curl unzip wget \
             python3 python3-pip python3-pyelftools python3-requests \
-            libcapstone-dev ccache \
-            clang
+            libcapstone-dev ccache clang
+
+      - name: Install aarch64 cross-compiler toolchain
+        if: env.ARCH == 'aarch64'
+        run: |
+          sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu
+
+      - name: Setup ICU for aarch64
+        if: env.ARCH == 'aarch64'
+        run: python3 scripts/build.py setup-icu
+
+      - name: Generate CMake toolchain
+        if: env.ARCH == 'aarch64'
+        run: python3 scripts/build.py generate-toolchain
 
       - name: Initialize CCache
         run: |
@@ -75,10 +87,17 @@ jobs:
           ccache -M ${{ env.CCACHE_MAXSIZE }}
           ccache -s
 
+      - name: Clone Dart SDK
+        run: python3 scripts/build.py clone-dart "${{ env.DART_VERSION }}"
+
+      - name: Generate CMake sources
+        run: python3 scripts/build.py generate-sources "${{ env.DART_VERSION }}"
+
+      - name: Build Dart VM
+        run: python3 scripts/build.py build-dartvm "${{ env.DART_VERSION }}" --arch "${{ env.ARCH }}"
+
       - name: Build blutter
-        run: |
-          echo "Building blutter ${{ env.DART_VERSION }} for ${{ env.ARCH }}..."
-          python3 scripts/build.py "${{ env.DART_VERSION }}" --arch "${{ env.ARCH }}"
+        run: python3 scripts/build.py build-blutter "${{ env.DART_VERSION }}" --arch "${{ env.ARCH }}"
 
       - name: Upload binary
         uses: actions/upload-artifact@v4

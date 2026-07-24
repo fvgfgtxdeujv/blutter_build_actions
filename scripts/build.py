@@ -39,16 +39,8 @@ def run(cmd, **kwargs):
     return result
 
 
-def setup_cross_compiler():
-    """Install clang and arm64 ICU from Ubuntu ports"""
-    print("[*] Setting up clang cross-compiler...")
-
-    # Install clang
-    run(["sudo", "apt-get", "update", "-qq"])
-    run(["sudo", "apt-get", "install", "-y", "--no-install-recommends",
-         "clang", "libcapstone-dev", "ccache", "wget", "gcc-aarch64-linux-gnu"])
-
-    # Extract ICU arm64 libraries to sysroot from Ubuntu ports
+def setup_icu():
+    """Extract ICU arm64 libraries to sysroot from Ubuntu ports"""
     print("[*] Extracting ICU arm64 dev libraries to sysroot...")
     icu_ver = subprocess.run(
         ["dpkg-query", "-W", "-f=${Version}", "libicu-dev"],
@@ -58,7 +50,7 @@ def setup_cross_compiler():
     base_url = "http://ports.ubuntu.com/ubuntu-ports/pool/main/i/icu"
     icu_dev_deb = f"libicu-dev_{icu_ver}_arm64.deb"
     icu_lib_deb = f"libicu{icu_ver.split('.')[0]}_{icu_ver}_arm64.deb"
-    deps_dir = SCRIPT_DIR.parent
+    deps_dir = PROJECT_DIR
 
     for deb_name in (icu_dev_deb, icu_lib_deb):
         local = deps_dir / deb_name
@@ -299,37 +291,40 @@ def build_blutter_binary(version, is_aarch64, macros):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Build blutter for ARM64")
-    parser.add_argument("version", help="Dart version (e.g. 3.3.4)")
-    parser.add_argument("--arch", choices=["aarch64", "x86_64"], default="aarch64")
+    parser = argparse.ArgumentParser(description="Build blutter")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("setup-icu")
+    p = sub.add_parser("generate-toolchain")
+    p = sub.add_parser("clone-dart")
+    p.add_argument("version")
+    p = sub.add_parser("generate-sources")
+    p.add_argument("version")
+    p = sub.add_parser("build-dartvm")
+    p.add_argument("version")
+    p.add_argument("--arch", choices=["aarch64", "x86_64"], default="aarch64")
+    p = sub.add_parser("build-blutter")
+    p.add_argument("version")
+    p.add_argument("--arch", choices=["aarch64", "x86_64"], default="aarch64")
+
     args = parser.parse_args()
 
-    is_aarch64 = args.arch == "aarch64"
-
-    # 1. Setup cross-compiler if needed
-    if is_aarch64:
-        setup_cross_compiler()
+    if args.command == "setup-icu":
+        setup_icu()
+    elif args.command == "generate-toolchain":
         generate_toolchain_file()
-
-    # 2. Clone Dart SDK
-    if not (SDK_DIR / f"v{args.version}" / "runtime" / "vm" / "version.cc").exists():
-        clone_dart_sdk(args.version)
-    else:
-        print(f"[=] Dart SDK {args.version} already cloned")
-
-    # 3. Generate sources
-    generate_sources(args.version)
-
-    # 4. Build Dart runtime
-    build_dart_runtime(args.version, is_aarch64)
-
-    # 5. Detect macros
-    macros = detect_macros(args.version)
-
-    # 6. Build blutter binary
-    build_blutter_binary(args.version, is_aarch64, macros)
-
-    print("\n=== Build complete ===")
+    elif args.command == "clone-dart":
+        if not (SDK_DIR / f"v{args.version}" / "runtime" / "vm" / "version.cc").exists():
+            clone_dart_sdk(args.version)
+        else:
+            print(f"[=] Dart SDK {args.version} already cloned")
+    elif args.command == "generate-sources":
+        generate_sources(args.version)
+    elif args.command == "build-dartvm":
+        build_dart_runtime(args.version, args.arch == "aarch64")
+    elif args.command == "build-blutter":
+        macros = detect_macros(args.version)
+        build_blutter_binary(args.version, args.arch == "aarch64", macros)
 
 
 if __name__ == "__main__":
