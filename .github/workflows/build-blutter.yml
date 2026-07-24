@@ -16,9 +16,6 @@ on:
         required: false
         type: boolean
         default: true
-  push:
-    branches: [ master ]
-    paths: [ '.github/workflows/build-blutter.yml', 'blutter/**', 'scripts/**' ]
 
 permissions:
   contents: write
