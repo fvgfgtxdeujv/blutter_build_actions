@@ -24,8 +24,8 @@ BUILD_DIR = PROJECT_DIR / "build"
 PKG_LIB_DIR = PROJECT_DIR / "packages" / "lib"
 PKG_INC_DIR = PROJECT_DIR / "packages" / "include"
 BIN_DIR = PROJECT_DIR / "bin"
-CMAKE_TEMPLATE = SCRIPT_DIR / "scripts" / "CMakeLists.txt"
-CREATE_SRCLIST = SCRIPT_DIR / "scripts" / "dartvm_create_srclist.py"
+CMAKE_TEMPLATE = SCRIPT_DIR / "CMakeLists.txt"
+CREATE_SRCLIST = SCRIPT_DIR / "dartvm_create_srclist.py"
 DART_GIT_URL = "https://github.com/dart-lang/sdk.git"
 
 
