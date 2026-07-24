@@ -57,7 +57,7 @@ def setup_cross_compiler():
     run(["wget", "-q", icu_url])
     run(["tar", "xzf", icu_archive])
 
-    icu_src = Path(f"icu/icu4c-{icu_ver.replace('.', '_')}-source")
+    icu_src = Path("icu")
     build_dir = icu_src / "build-arm64"
     build_dir.mkdir(parents=True, exist_ok=True)
 
