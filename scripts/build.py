@@ -48,34 +48,6 @@ def setup_cross_compiler():
     run(["sudo", "apt-get", "install", "-y", "--no-install-recommends",
          "clang", "libcapstone-dev", "ccache", "wget"])
 
-    # Install arm64 ICU from Ubuntu ports (Ubuntu 24.04 security pocket lacks arm64)
-    print("[*] Installing arm64 ICU from Ubuntu ports...")
-    arch = "arm64"
-    icu_ver = "78.3-2ubuntu1"
-    base_url = "https://ports.ubuntu.com/ubuntu-ports/pool/main/i/icu"
-
-    pkgs = [
-        f"libicu78_{icu_ver}_{arch}.deb",
-        f"libicu-dev_{icu_ver}_{arch}.deb",
-    ]
-
-    for pkg_file in pkgs:
-        pkg_name = pkg_file.rsplit("_", 2)[0]
-        result = subprocess.run(
-            ["dpkg", "-s", f"{pkg_name}:{arch}"],
-            capture_output=True, text=True
-        )
-        if result.returncode == 0:
-            print(f"[=] {pkg_name}:{arch} already installed")
-            continue
-
-        url = f"{base_url}/{pkg_file}"
-        print(f"  Downloading {url}")
-        run(["wget", "-q", url, "-O", f"/tmp/{pkg_file}"])
-        run(["sudo", "dpkg", "-i", f"/tmp/{pkg_file}"])
-        run(["rm", "-f", f"/tmp/{pkg_file}"])
-        build_icu_from_source(arch)
-
     # Build ICU from source for aarch64
     print("[*] Building ICU for aarch64 (this takes ~2 min)...")
     icu_ver = "75.1"
