@@ -41,8 +41,10 @@ jobs:
           echo "DART_VERSION=${{ inputs.dart_version || '3.3.4' }}" >> $GITHUB_ENV
           if [ "${{ inputs.arch_aarch64 || 'true' }}" = "true" ]; then
             echo "ARCH=aarch64" >> $GITHUB_ENV
+            echo "ARCH_SUFFIX=android_arm64" >> $GITHUB_ENV
           else
             echo "ARCH=x86_64" >> $GITHUB_ENV
+            echo "ARCH_SUFFIX=android_x64" >> $GITHUB_ENV
           fi
 
       - name: Restore Dart SDK cache
@@ -117,13 +119,13 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: blutter-${{ env.DART_VERSION }}-${{ env.ARCH }}
-          path: bin/blutter_dartvm${{ env.DART_VERSION }}_android_arm64
+          path: bin/blutter_dartvm${{ env.DART_VERSION }}_${{ env.ARCH_SUFFIX }}
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.DART_VERSION }}
           name: blutter ${{ env.DART_VERSION }} (${{ env.ARCH }})
-          files: bin/blutter_dartvm${{ env.DART_VERSION }}_android_arm64
+          files: bin/blutter_dartvm${{ env.DART_VERSION }}_${{ env.ARCH_SUFFIX }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

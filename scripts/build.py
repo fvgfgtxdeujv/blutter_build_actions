@@ -203,19 +203,37 @@ def generate_sources(version):
     return cpp_std
 
 
-def build_dart_runtime(version, is_aarch64):
+ARCH_MAP = {
+    "aarch64": {"os": "android", "arch": "arm64", "compressed_ptrs": True},
+    "x86_64":  {"os": "android", "arch": "x64",   "compressed_ptrs": False},
+}
+
+
+def _arch_suffix(arch):
+    a = ARCH_MAP[arch]
+    return f"{a['os']}_{a['arch']}"
+
+
+def _dart_lib_name(version, arch):
+    return f"dartvm{version}_{_arch_suffix(arch)}"
+
+
+def build_dart_runtime(version, arch):
     """Build Dart runtime static library"""
-    print(f"[*] Building Dart runtime (cross={is_aarch64})...")
+    is_aarch64 = arch == "aarch64"
+    a = ARCH_MAP[arch]
+    print(f"[*] Building Dart runtime (target={a['os']}/{a['arch']}, cross={is_aarch64})...")
     clone_dir = SDK_DIR / f"v{version}"
-    dart_lib_name = f"dartvm{version}_android_arm64"
+    dart_lib_name = _dart_lib_name(version, arch)
     build_path = BUILD_DIR / dart_lib_name
 
     build_path.mkdir(parents=True, exist_ok=True)
 
     cmake_args = [
         CMAKE_CMD, "-GNinja", "-B", str(build_path),
-        "-DTARGET_OS=android", "-DTARGET_ARCH=arm64",
-        "-DCOMPRESSED_PTRS=1", "-DCMAKE_BUILD_TYPE=Release",
+        f"-DTARGET_OS={a['os']}", f"-DTARGET_ARCH={a['arch']}",
+        f"-DCOMPRESSED_PTRS={1 if a['compressed_ptrs'] else 0}",
+        "-DCMAKE_BUILD_TYPE=Release",
         "--log-level=NOTICE",
         f"-DCMAKE_INSTALL_PREFIX={PROJECT_DIR / 'packages'}",
         str(clone_dir),
@@ -271,10 +289,11 @@ def detect_macros(version):
     return macros
 
 
-def build_blutter_binary(version, is_aarch64, macros):
+def build_blutter_binary(version, arch, macros):
     """Build blutter executable"""
-    print(f"[*] Building blutter binary (cross={is_aarch64})...")
-    dart_lib = f"dartvm{version}_android_arm64"
+    is_aarch64 = arch == "aarch64"
+    dart_lib = _dart_lib_name(version, arch)
+    print(f"[*] Building blutter binary (arch={arch}, cross={is_aarch64})...")
     bin_name = f"blutter_{dart_lib}"
     build_path = BUILD_DIR / bin_name
     build_path.mkdir(parents=True, exist_ok=True)
@@ -340,10 +359,10 @@ def main():
     elif args.command == "generate-sources":
         generate_sources(args.version)
     elif args.command == "build-dartvm":
-        build_dart_runtime(args.version, args.arch == "aarch64")
+        build_dart_runtime(args.version, args.arch)
     elif args.command == "build-blutter":
         macros = detect_macros(args.version)
-        build_blutter_binary(args.version, args.arch == "aarch64", macros)
+        build_blutter_binary(args.version, args.arch, macros)
 
 
 if __name__ == "__main__":
