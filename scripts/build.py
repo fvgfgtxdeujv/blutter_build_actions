@@ -158,6 +158,58 @@ set(CMAKE_PREFIX_PATH "/usr/aarch64-linux-gnu")
     print(f"[+] Toolchain file: {tc_path}")
 
 
+def clone_dart_sdk(version):
+    """Clone Dart SDK at specific version"""
+    print(f"[*] Cloning Dart SDK {version}...")
+    clone_dir = SDK_DIR / f"v{version}"
+
+    if clone_dir.exists():
+        shutil.rmtree(clone_dir)
+
+    # Full clone with complete history
+    run([GIT_CMD, "clone", "-c", "advice.detachedHead=false",
+         "-b", version, DART_GIT_URL, str(clone_dir)])
+
+    # Remove unnecessary directories (keep runtime, tools, third_party/double-conversion)
+    for dir_name in [".git", ".github", "CHANGELOG.md", "CONTRIBUTING.md", 
+                     "README.md", "analysis_options.yaml", "bin", "docs", "examples",
+                     "pkg", "samples", "tests"]:
+        target = clone_dir / dir_name
+        if target.exists():
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+    
+    # Remove third_party except double-conversion
+    third_party = clone_dir / "third_party"
+    if third_party.exists():
+        for item in third_party.iterdir():
+            if item.name != "double-conversion":
+                if item.is_dir():
+                    shutil.rmtree(item)
+                else:
+                    item.unlink()
+
+    # Generate version.cc from template
+    version_in = clone_dir / "runtime" / "vm" / "version_in.cc"
+    version_cc = clone_dir / "runtime" / "vm" / "version.cc"
+    
+    if version_in.exists():
+        template = version_in.read_text()
+        content = template.replace("{{VERSION_STR}}", version)
+        content = content.replace("{{CHANNEL}}", "stable")
+        content = content.replace("{{COMMIT_TIME}}", "build")
+        content = content.replace("{{GIT_HASH}}", version)
+        content = content.replace("{{SNAPSHOT_HASH}}", "")
+        version_cc.write_text(content)
+        print(f"[+] Generated version.cc from template")
+    else:
+        print("[!] Warning: version_in.cc not found")
+
+    print(f"[+] Dart SDK cloned to {clone_dir}")
+
+
 def generate_sources(version):
     """Generate sourcelist.cmake and detect C++ standard"""
     print("[*] Generating source list...")
