@@ -10,9 +10,9 @@ GitHub Actions workflow for building [blutter](https://github.com/worawit/blutte
 
 | 文件 | 架构 | 说明 |
 |------|------|------|
-| `bin/blutter_dartvm<ver>_android_arm64` | aarch64 | 交叉编译，适用于 Termux 等 Android ARM64 环境 |
+| `bin/blutter_dartvm<ver>_android_arm64` | aarch64 | 适用于 Android ARM64 环境 |
 
-### 2. Dart VM 开发包
+### 2. Dart VM 开发包（需要勾选 Upload Packages）
 
 | 目录 | 内容 |
 |------|------|
@@ -21,28 +21,31 @@ GitHub Actions workflow for building [blutter](https://github.com/worawit/blutte
 
 ## 用法
 
-### 方式一：直接使用编译好的二进制
-
 1. Fork 本仓库到你的 GitHub
 2. 进入仓库 → Actions → "Build Blutter Binary" → **Run workflow**
-3. 填写 **Dart version**（如 `3.3.4`、`3.4.2`）
-4. 编译完成后从 Release 下载对应版本的压缩包
-5. 解压后得到：
-   - `bin/blutter_dartvm<ver>_android_arm64` - 可执行文件
-   - `packages/` - Dart VM 开发包
+3. 填写参数：
+   - **Dart version**（必填）：如 `3.3.4`、`3.4.2`
+   - **Upload packages**（可选）：是否上传 Dart VM 开发包（默认不上传）
+4. 编译完成后从 Release 或 Artifacts 下载文件
 
-### 方式二：本地编译（需要官方 blutter 项目）
+### Upload Packages 选项说明
 
-下载 Release 中的 `packages/` 目录到官方 blutter 项目，然后使用官方脚本自动构建：
+| 选项 | 上传内容 | 适用场景 | 文件大小 |
+|------|----------|----------|----------|
+| ❌ 关闭（默认） | 仅 `bin/` 目录 | 只需运行 blutter | ~50 MB |
+| ✅ 开启 | `bin/` + `packages/` | 本地开发/调试 | ~500 MB |
 
-```bash
-# 将 packages 解压到 blutter 项目根目录
-python3 blutter.py path/to/app/lib/arm64-v8a out_dir
-```
+### Download Packages 使用场景
 
-## 架构支持
+**需要 packages 目录：**
+- 本地编译/调试 blutter
+- 为多个 Dart 版本构建（复用头文件）
+- 开发相关工具
+- 学习 Dart VM 内部结构
 
-- **aarch64**：在 ARM64 Ubuntu runner 上原生编译（使用 `ubuntu-24.04-arm`）
+**不需要 packages 目录：**
+- 直接使用编译好的 blutter 二进制
+- 只需要运行工具分析 APK
 
 ## 版本兼容性
 
