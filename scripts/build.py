@@ -158,6 +158,43 @@ set(CMAKE_PREFIX_PATH "/usr/aarch64-linux-gnu")
     print(f"[+] Toolchain file: {tc_path}")
 
 
+def fix_python312_compatibility(clone_dir):
+    """Fix Python 3.12 compatibility for old Dart versions (imp module removed)"""
+    utils_path = clone_dir / "tools" / "utils.py"
+    if not utils_path.exists():
+        return
+    
+    content = utils_path.read_text()
+    
+    # Check if imp module is used
+    if "import imp" not in content:
+        return
+    
+    print("[*] Fixing Python 3.12 compatibility...")
+    
+    # Replace imp with importlib
+    imp_replacement = """import importlib.util
+import importlib.machinery
+
+def load_source(modname, filename):
+    loader = importlib.machinery.SourceFileLoader(modname, filename)
+    spec = importlib.util.spec_from_file_location(modname, filename, loader=loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+"""
+    
+    # Replace invalid escape sequences with raw strings
+    content = content.replace("import imp\n", imp_replacement)
+    content = content.replace("imp.load_source", "load_source")
+    content = content.replace(" ' awk ", " r' awk ")
+    content = content.replace("match_against('", "match_against(r'")
+    content = content.replace("re.search('", "re.search(r'")
+    
+    utils_path.write_text(content)
+    print("[+] Python 3.12 compatibility fixed")
+
+
 def clone_dart_sdk(version):
     """Clone Dart SDK at specific version (with sparse checkout)"""
     print(f"[*] Cloning Dart SDK {version}...")
@@ -178,6 +215,9 @@ def clone_dart_sdk(version):
     for f in clone_dir.iterdir():
         if f.is_file():
             f.unlink()
+
+    # Fix Python 3.12 compatibility for old Dart versions
+    fix_python312_compatibility(clone_dir)
 
     # Generate version.cc
     run([sys.executable, "tools/make_version.py",
