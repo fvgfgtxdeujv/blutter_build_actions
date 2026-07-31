@@ -229,31 +229,75 @@ def clone_dart_sdk(version):
                 else:
                     item.unlink()
 
-    # Fix Python 3.12 compatibility for old Dart versions
+    # Fix Python 3.12 compatibility and version generation for old/new Dart versions
     fix_python312_compatibility(clone_dir)
+    fix_version_generation(clone_dir)
 
-    # Generate version.cc manually (more reliable than make_version.py)
-    version_cc = clone_dir / "runtime" / "vm" / "version.cc"
-    version_cc.write_text(f'''// Copyright (c) 2012, the Dart project authors. Please see the AUTHORS file
-// for details. All rights reserved. Use of this source code is governed by a
-// BSD-style license that can be found in the LICENSE file.
-
-#include "vm/version.h"
-
-#include "vm/globals.h"
-
-namespace dart {{
-
-const char* Version::str_ = "{version}";
-const char* Version::snapshot_hash_ = "";
-const char* Version::commit_ = "";
-const char* Version::git_short_hash_ = "";
-const char* Version::channel_ = "stable";
-
-}}  // namespace dart
-''')
+    # Generate version.cc
+    run([sys.executable, "tools/make_version.py",
+         "--output", "runtime/vm/version.cc",
+         "--input", "runtime/vm/version_in.cc"], cwd=clone_dir)
 
     print(f"[+] Dart SDK cloned to {clone_dir}")
+
+
+def fix_version_generation(clone_dir):
+    """Fix version generation issues with shallow clones"""
+    utils_path = clone_dir / "tools" / "utils.py"
+    if not utils_path.exists():
+        return
+    
+    content = utils_path.read_text()
+    
+    # Fix get_git_revision to return '0' instead of None for shallow clones
+    old_func = """def GetGitRevision(git_revision_file=None):
+    if git_revision_file is not None:
+        try:
+            with open(git_revision_file) as fd:
+                return fd.read().strip()
+        except:
+            pass
+    revision = None
+    try:
+        p = subprocess.Popen(['git', 'rev-parse', 'HEAD'],
+                             stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT,
+                             cwd=DART_DIR)
+        (revision, stderroutput) = p.communicate()
+        if p.returncode != 0:
+            sys.stderr.write(stderroutput.decode('ascii'))
+        else:
+            revision = revision.decode('ascii').strip()
+    except:
+        pass
+    return revision"""
+    
+    new_func = """def GetGitRevision(git_revision_file=None):
+    if git_revision_file is not None:
+        try:
+            with open(git_revision_file) as fd:
+                return fd.read().strip()
+        except:
+            pass
+    revision = None
+    try:
+        p = subprocess.Popen(['git', 'rev-parse', 'HEAD'],
+                             stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT,
+                             cwd=DART_DIR)
+        (revision, stderroutput) = p.communicate()
+        if p.returncode != 0:
+            sys.stderr.write(stderroutput.decode('ascii'))
+        else:
+            revision = revision.decode('ascii').strip()
+    except:
+        pass
+    return revision if revision else '0'"""
+    
+    if old_func in content:
+        content = content.replace(old_func, new_func)
+        utils_path.write_text(content)
+        print("[+] Fixed GetGitRevision for shallow clones")
 
 
 def generate_sources(version):
