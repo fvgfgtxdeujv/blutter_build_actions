@@ -232,10 +232,26 @@ def clone_dart_sdk(version):
     # Fix Python 3.12 compatibility for old Dart versions
     fix_python312_compatibility(clone_dir)
 
-    # Generate version.cc
-    run([sys.executable, "tools/make_version.py",
-         "--output", "runtime/vm/version.cc",
-         "--input", "runtime/vm/version_in.cc"], cwd=clone_dir)
+    # Generate version.cc manually (more reliable than make_version.py)
+    version_cc = clone_dir / "runtime" / "vm" / "version.cc"
+    version_cc.write_text(f'''// Copyright (c) 2012, the Dart project authors. Please see the AUTHORS file
+// for details. All rights reserved. Use of this source code is governed by a
+// BSD-style license that can be found in the LICENSE file.
+
+#include "vm/version.h"
+
+#include "vm/globals.h"
+
+namespace dart {{
+
+const char* Version::str_ = "{version}";
+const char* Version::snapshot_hash_ = "";
+const char* Version::commit_ = "";
+const char* Version::git_short_hash_ = "";
+const char* Version::channel_ = "stable";
+
+}}  // namespace dart
+''')
 
     print(f"[+] Dart SDK cloned to {clone_dir}")
 
