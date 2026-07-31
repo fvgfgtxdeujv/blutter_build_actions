@@ -219,6 +219,13 @@ def clone_dart_sdk(version):
     # Fix Python 3.12 compatibility for old Dart versions
     fix_python312_compatibility(clone_dir)
 
+    # Fetch VERSION file with full content (required for make_version.py)
+    # The sparse checkout may not include full file content
+    version_file = clone_dir / "tools" / "VERSION"
+    if not version_file.exists() or version_file.stat().st_size < 10:
+        run([GIT_CMD, "fetch", "origin", version, "--depth=1"], cwd=clone_dir)
+        run([GIT_CMD, "checkout", "FETCH_HEAD", "--", "tools/VERSION"], cwd=clone_dir)
+
     # Generate version.cc
     run([sys.executable, "tools/make_version.py",
          "--output", "runtime/vm/version.cc",
