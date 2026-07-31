@@ -73,12 +73,16 @@ jobs:
       - name: 打包上传 packages (可选)
         if: inputs.upload_packages == true
         run: |
-          mkdir -p release_upload
-          mv bin/blutter_dartvm${{ env.DART_VERSION }}_android_arm64 release_upload/bin/ 2>/dev/null || true
-          mv packages release_upload/ 2>/dev/null || true
-          cd release_upload
-          zip -r ../blutter_dartvm${{ env.DART_VERSION }}_android_arm64.zip .
-          cd ..
+          # 将二进制移动到 bin 目录
+          mkdir -p bin
+          mv bin/blutter_dartvm${{ env.DART_VERSION }}_android_arm64 . 2>/dev/null || true
+          mv blutter_dartvm${{ env.DART_VERSION }}_android_arm64 bin/
+          
+          # 打包 bin 和 packages 目录
+          zip -r blutter_dartvm${{ env.DART_VERSION }}_android_arm64.zip bin packages/
+          
+          echo "打包完成:"
+          unzip -l blutter_dartvm${{ env.DART_VERSION }}_android_arm64.zip
 
       - name: 上传单个二进制 (不打包)
         if: inputs.upload_packages == false
