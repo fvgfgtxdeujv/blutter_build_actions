@@ -1,13 +1,13 @@
-name: Build Blutter Binary
+name: 构建 Blutter 二进制文件
 
 on:
   workflow_dispatch:
     inputs:
       dart_version:
-        description: 'Dart version (e.g. 3.3.4, 3.4.2, 3.5.2)'
+        description: 'Dart 版本（如 3.3.4, 3.4.2, 3.5.2）'
         required: true
       upload_packages:
-        description: 'Upload packages directory (Dart VM headers and static library)'
+        description: '上传 packages 目录（Dart VM 头文件和静态库）'
         type: boolean
         default: false
         required: false
@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   build:
-    name: Build Blutter Binary
+    name: 构建 Blutter
     runs-on: ubuntu-24.04-arm
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
@@ -29,7 +29,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Restore Dart SDK cache
+      - name: 恢复 Dart SDK 缓存
         id: cache-dartsdk
         uses: actions/cache@v4
         with:
@@ -37,14 +37,14 @@ jobs:
           key: dartsdk-${{ env.DART_VERSION }}
           restore-keys: dartsdk-${{ env.DART_VERSION }}_
 
-      - name: Restore CCache
+      - name: 恢复 CCache 缓存
         uses: actions/cache@v4
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-${{ env.DART_VERSION }}
           restore-keys: ccache-${{ env.DART_VERSION }}-
 
-      - name: Install dependencies
+      - name: 安装依赖
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
@@ -52,25 +52,25 @@ jobs:
             python3 python3-pip python3-pyelftools python3-requests \
             libcapstone-dev ccache clang llvm
 
-      - name: Initialize CCache
+      - name: 初始化 CCache
         run: |
           mkdir -p "${{ env.CCACHE_DIR }}"
           ccache -M ${{ env.CCACHE_MAXSIZE }}
           ccache -s
 
-      - name: Clone Dart SDK
+      - name: 克隆 Dart SDK
         run: python3 scripts/build.py clone-dart "${{ env.DART_VERSION }}"
 
-      - name: Generate CMake sources
+      - name: 生成 CMake 源文件
         run: python3 scripts/build.py generate-sources "${{ env.DART_VERSION }}"
 
-      - name: Build Dart VM
+      - name: 构建 Dart VM
         run: python3 scripts/build.py build-dartvm "${{ env.DART_VERSION }}" --arch aarch64
 
-      - name: Build blutter
+      - name: 构建 blutter
         run: python3 scripts/build.py build-blutter "${{ env.DART_VERSION }}" --arch aarch64
 
-      - name: Upload binary and packages
+      - name: 上传二进制和 packages
         uses: actions/upload-artifact@v4
         with:
           name: blutter-${{ env.DART_VERSION }}
@@ -79,19 +79,19 @@ jobs:
             ${{ inputs.upload_packages && 'packages/' || '' }}
 
   release:
-    name: Create Release
+    name: 创建 Release
     needs: build
     runs-on: ubuntu-24.04-arm
     env:
       DART_VERSION: ${{ inputs.dart_version || '3.3.4' }}
     steps:
-      - name: Download artifacts
+      - name: 下载 artifacts
         uses: actions/download-artifact@v4
         with:
           name: blutter-${{ env.DART_VERSION }}
           path: .
 
-      - name: Show build artifacts
+      - name: 显示构建产物
         run: |
           echo "=== Binary files ==="
           ls -la bin/
@@ -102,7 +102,7 @@ jobs:
             echo "=== Packages not uploaded (upload_packages=false) ==="
           fi
 
-      - name: Create Release
+      - name: 创建 Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.DART_VERSION }}
