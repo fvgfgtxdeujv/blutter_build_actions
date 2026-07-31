@@ -76,7 +76,15 @@ jobs:
           name: blutter-${{ env.DART_VERSION }}
           path: |
             bin/
-            ${{ inputs.upload_packages && 'packages/' || '' }}
+          overwrite: true
+
+      - name: 上传 packages (可选)
+        if: inputs.upload_packages == true
+        uses: actions/upload-artifact@v4
+        with:
+          name: blutter-${{ env.DART_VERSION }}-packages
+          path: packages/
+          overwrite: true
 
   release:
     name: 创建 Release
@@ -85,11 +93,18 @@ jobs:
     env:
       DART_VERSION: ${{ inputs.dart_version || '3.3.4' }}
     steps:
-      - name: 下载 artifacts
+      - name: 下载 bin artifacts
         uses: actions/download-artifact@v4
         with:
           name: blutter-${{ env.DART_VERSION }}
           path: .
+
+      - name: 下载 packages artifacts
+        if: inputs.upload_packages == true
+        uses: actions/download-artifact@v4
+        with:
+          name: blutter-${{ env.DART_VERSION }}-packages
+          path: packages/
 
       - name: 显示构建产物
         run: |
