@@ -1,6 +1,6 @@
-# Blutter Build Actions
+# Blutter 构建工作流
 
-GitHub Actions workflow for building [blutter](https://github.com/worawit/blutter) binaries.
+用于构建 [blutter](https://github.com/worawit/blutter) 二进制文件的 GitHub Actions 工作流。
 
 ## 产物
 
