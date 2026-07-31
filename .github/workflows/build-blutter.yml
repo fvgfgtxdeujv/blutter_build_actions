@@ -27,18 +27,18 @@ jobs:
       CCACHE_NOHARDLINK: "true"
       DART_VERSION: ${{ inputs.dart_version || '3.3.4' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: 恢复 Dart SDK 缓存
         id: cache-dartsdk
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: dartsdk/
           key: dartsdk-${{ env.DART_VERSION }}
           restore-keys: dartsdk-${{ env.DART_VERSION }}_
 
       - name: 恢复 CCache 缓存
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-${{ env.DART_VERSION }}
@@ -71,7 +71,7 @@ jobs:
         run: python3 scripts/build.py build-blutter "${{ env.DART_VERSION }}" --arch aarch64
 
       - name: 上传二进制
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: blutter_dartvm${{ env.DART_VERSION }}_android_arm64
           path: bin/blutter_dartvm${{ env.DART_VERSION }}_android_arm64
@@ -79,7 +79,7 @@ jobs:
 
       - name: 上传 packages (可选)
         if: inputs.upload_packages == true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: packages_dartvm${{ env.DART_VERSION }}_android_arm64
           path: packages/
@@ -93,14 +93,14 @@ jobs:
       DART_VERSION: ${{ inputs.dart_version || '3.3.4' }}
     steps:
       - name: 下载二进制
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: blutter_dartvm${{ env.DART_VERSION }}_android_arm64
           path: .
 
       - name: 下载 packages
         if: inputs.upload_packages == true
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: packages_dartvm${{ env.DART_VERSION }}_android_arm64
           path: packages/
