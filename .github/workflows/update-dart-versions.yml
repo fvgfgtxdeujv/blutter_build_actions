@@ -1,0 +1,56 @@
+name: 更新 Dart 版本列表
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  update:
+    name: 获取并触发构建
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 计算待构建 Dart 版本
+        id: list
+        run: |
+          # 获取所有 Dart SDK 版本 tag
+          timeout 120 git ls-remote --tags https://github.com/dart-lang/sdk.git \
+            | grep -oP 'refs/tags/\K[0-9]+\.[0-9]+\.[0-9]+$' \
+            | sort -V | uniq > /tmp/all_versions.txt
+
+          # 过滤低于 2.15 的版本（blutter 不支持）
+          awk -F. '$1 > 2 || ($1 == 2 && $2 >= 15)' /tmp/all_versions.txt > /tmp/filtered.txt
+
+          # 获取仓库已有 Release 的 tag（用于排除已完成版本）
+          gh release list --limit 1000 --json tagName -q '.[].tagName' > /tmp/existing.txt 2>/dev/null || true
+
+          # 计算待构建版本（排除已发布的）
+          sort /tmp/filtered.txt -o /tmp/filtered.txt
+          sort /tmp/existing.txt -o /tmp/existing.txt
+          comm -23 /tmp/filtered.txt /tmp/existing.txt > /tmp/todo.txt
+
+          # 转为 JSON 数组
+          VERSIONS=$(python3 -c "
+import json
+versions = [l.strip() for l in open('/tmp/todo.txt') if l.strip()]
+print(json.dumps(versions))
+")
+          echo "$VERSIONS" > /tmp/versions.json
+          echo "待构建版本数: $(echo "$VERSIONS" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
+          echo "versions=$VERSIONS" >> $GITHUB_OUTPUT
+
+      - name: 触发构建 workflow
+        if: steps.list.outputs.versions != '[]'
+        run: |
+          VERSIONS='${{ steps.list.outputs.versions }}'
+          curl -X POST \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/${{ github.repository }}/dispatches \
+            -d "{\"event_type\": \"build-dart\", \"client_payload\": {\"versions\": $VERSIONS}}"
+          echo "已触发构建 ${{ steps.list.outputs.versions }}"

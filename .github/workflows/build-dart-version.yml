@@ -1,56 +1,46 @@
-name: 批量构建所有 Dart 版本
+name: 构建 Dart 版本
 
 on:
-  schedule:
-    - cron: '0 2 * * *'
+  repository_dispatch:
+    types: [build-dart]
   workflow_dispatch:
+    inputs:
+      dart_version:
+        description: 'Dart 版本（如 3.3.4, 3.4.2, 3.5.2）'
+        required: true
 
 permissions:
   contents: write
 
 jobs:
-  get-versions:
-    name: 获取待构建版本
+  prepare:
+    name: 准备版本列表
     runs-on: ubuntu-24.04
     outputs:
-      versions: ${{ steps.list.outputs.versions }}
+      versions: ${{ steps.prepare.outputs.versions }}
     steps:
-      - name: 计算待构建 Dart 版本
-        id: list
+      - name: 解析版本列表
+        id: prepare
         run: |
-          # 获取所有 Dart SDK 版本 tag
-          timeout 120 git ls-remote --tags https://github.com/dart-lang/sdk.git \
-            | grep -oP 'refs/tags/\K[0-9]+\.[0-9]+\.[0-9]+$' \
-            | sort -V | uniq > /tmp/all_versions.txt
-
-          # 过滤低于 2.15 的版本（blutter 不支持）
-          awk -F. '$1 > 2 || ($1 == 2 && $2 >= 15)' /tmp/all_versions.txt > /tmp/filtered.txt
-
-          # 获取仓库已有 Release 的 tag（用于排除已完成版本）
-          gh release list --limit 1000 --json tagName -q '.[].tagName' > /tmp/existing.txt 2>/dev/null || true
-
-          # 计算待构建版本（排除已发布的）
-          sort /tmp/filtered.txt -o /tmp/filtered.txt
-          sort /tmp/existing.txt -o /tmp/existing.txt
-          comm -23 /tmp/filtered.txt /tmp/existing.txt > /tmp/todo.txt
-
-          # 转为 JSON 数组
-          VERSIONS=$(python3 -c "
-import json
-versions = [l.strip() for l in open('/tmp/todo.txt') if l.strip()]
-print(json.dumps(versions))
-")
+          if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
+            # 从 update workflow 的 client_payload 获取版本列表
+            VERSIONS='${{ toJson(github.event.client_payload.versions) }}'
+          else
+            # 手动触发单个版本
+            VERSIONS="[\"${{ inputs.dart_version }}\"]"
+          fi
           echo "versions=$VERSIONS" >> $GITHUB_OUTPUT
-          echo "待构建版本数: $(echo "$VERSIONS" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
+          echo "待构建版本: $VERSIONS"
 
   build:
     name: 构建 Dart ${{ matrix.version }}
-    needs: get-versions
-    if: needs.get-versions.outputs.versions != '[]'
+    needs: prepare
+    if: needs.prepare.outputs.versions != '[]'
     strategy:
       fail-fast: false
+      max-parallel: 20
       matrix:
-        version: ${{ fromJson(needs.get-versions.outputs.versions) }}
+        version: ${{ fromJson(needs.prepare.outputs.versions) }}
     runs-on: ubuntu-24.04-arm
     env:
       DART_VERSION: ${{ matrix.version }}
