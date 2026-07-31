@@ -164,34 +164,23 @@ def fix_python312_compatibility(clone_dir):
     if not utils_path.exists():
         return
     
-    content = utils_path.read_text()
-    needs_fix = False
+    # Read file in binary mode first to check content
+    content = utils_path.read_text(encoding='utf-8')
+    original_content = content
     
-    # Check if imp module is used (old Dart versions)
+    # Replace imp module (old Dart versions)
     if "import imp" in content:
-        needs_fix = True
-        # Replace imp with importlib
-        imp_replacement = """import importlib.util
-import importlib.machinery
-
-def load_source(modname, filename):
-    loader = importlib.machinery.SourceFileLoader(modname, filename)
-    spec = importlib.util.spec_from_file_location(modname, filename, loader=loader)
-    module = importlib.util.module_from_spec(spec)
-    loader.exec_module(module)
-    return module
-"""
-        content = content.replace("import imp\n", imp_replacement)
+        content = content.replace(
+            "import imp",
+            "import importlib.util\nimport importlib.machinery\n\ndef load_source(modname, filename):\n    loader = importlib.machinery.SourceFileLoader(modname, filename)\n    spec = importlib.util.spec_from_file_location(modname, filename, loader=loader)\n    module = importlib.util.module_from_spec(spec)\n    loader.exec_module(module)\n    return module\n"
+        )
         content = content.replace("imp.load_source", "load_source")
     
-    # Fix invalid escape sequences in regex patterns (Python 3.12+)
-    # Only fix specific patterns like ' awk ' that are not proper regex
-    # DO NOT fix \\d patterns as they are already correctly escaped
-    if " ' awk " in content:
-        needs_fix = True
-        content = content.replace(" ' awk ", " r' awk ")
+    # Fix invalid escape sequences (Python 3.12+)
+    # Only fix non-regex strings, leave \\d patterns intact
+    content = content.replace(" ' awk ", " r' awk ")
     
-    if needs_fix:
+    if content != original_content:
         utils_path.write_text(content)
         print("[+] Python 3.12 compatibility fixed")
 
