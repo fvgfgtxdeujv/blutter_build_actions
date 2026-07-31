@@ -12,18 +12,8 @@ permissions:
 
 jobs:
   build:
-    name: Build (${{ matrix.arch }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: aarch64
-            suffix: android_arm64
-            runs-on: ubuntu-24.04-arm
-          - arch: x86_64
-            suffix: linux_x64
-            runs-on: ubuntu-24.04
-    runs-on: ${{ matrix.runs-on }}
+    name: Build Blutter Binary
+    runs-on: ubuntu-24.04-arm
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 5G
@@ -46,7 +36,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ env.DART_VERSION }}-${{ matrix.arch }}
+          key: ccache-${{ env.DART_VERSION }}
           restore-keys: ccache-${{ env.DART_VERSION }}-
 
       - name: Install dependencies
@@ -70,43 +60,46 @@ jobs:
         run: python3 scripts/build.py generate-sources "${{ env.DART_VERSION }}"
 
       - name: Build Dart VM
-        run: python3 scripts/build.py build-dartvm "${{ env.DART_VERSION }}" --arch "${{ matrix.arch }}"
+        run: python3 scripts/build.py build-dartvm "${{ env.DART_VERSION }}" --arch aarch64
 
       - name: Build blutter
-        run: python3 scripts/build.py build-blutter "${{ env.DART_VERSION }}" --arch "${{ matrix.arch }}"
+        run: python3 scripts/build.py build-blutter "${{ env.DART_VERSION }}" --arch aarch64
 
-      - name: Upload binary
+      - name: Upload binary and packages
         uses: actions/upload-artifact@v4
         with:
-          name: blutter-${{ env.DART_VERSION }}-${{ matrix.arch }}
-          path: bin/blutter_dartvm${{ env.DART_VERSION }}_${{ matrix.suffix }}
+          name: blutter-${{ env.DART_VERSION }}
+          path: |
+            bin/
+            packages/
 
   release:
     name: Create Release
     needs: build
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04-arm
     env:
       DART_VERSION: ${{ inputs.dart_version || '3.3.4' }}
     steps:
-      - name: Download all artifacts
+      - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: blutter-${{ env.DART_VERSION }}-*
-          path: bin/
+          name: blutter-${{ env.DART_VERSION }}
+          path: .
 
-      - name: Flatten artifact directories
+      - name: Show build artifacts
         run: |
-          find bin -type f | while read f; do
-            mv "$f" bin/
-          done
-          find bin -type d -empty -delete
+          echo "=== Binary files ==="
           ls -la bin/
+          echo "=== Packages structure ==="
+          find packages -type f | head -20
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.DART_VERSION }}
           name: blutter ${{ env.DART_VERSION }}
-          files: bin/*
+          files: |
+            bin/*
+            packages/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
