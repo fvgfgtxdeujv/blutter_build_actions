@@ -72,15 +72,24 @@ jobs:
 
       - name: 移动到 bin 目录
         run: |
-          mkdir -p release_upload
-          mv bin/blutter_dartvm${{ env.DART_VERSION }}_android_arm64 release_upload/ 2>/dev/null || true
+          mkdir -p release_upload/bin
+          mv bin/blutter_dartvm${{ env.DART_VERSION }}_android_arm64 release_upload/bin/ 2>/dev/null || true
 
       - name: 复制 packages 目录 (可选)
         if: inputs.upload_packages == true
         run: |
           mv packages release_upload/ 2>/dev/null || true
 
-      - name: 打包为 zip
+      - name: 仅上传二进制 (不打包)
+        if: inputs.upload_packages == false
+        uses: actions/upload-artifact@v5
+        with:
+          name: blutter_dartvm${{ env.DART_VERSION }}_android_arm64
+          path: release_upload/bin/blutter_dartvm${{ env.DART_VERSION }}_android_arm64
+          overwrite: true
+
+      - name: 打包为 zip (包含 packages)
+        if: inputs.upload_packages == true
         run: |
           cd release_upload
           zip -r ../blutter_dartvm${{ env.DART_VERSION }}_android_arm64.zip .
@@ -88,7 +97,8 @@ jobs:
           echo "打包完成:"
           ls -lh *.zip
 
-      - name: 上传 release 包
+      - name: 上传 zip 包
+        if: inputs.upload_packages == true
         uses: actions/upload-artifact@v5
         with:
           name: blutter_dartvm${{ env.DART_VERSION }}_android_arm64
@@ -108,20 +118,35 @@ jobs:
           name: blutter_dartvm${{ env.DART_VERSION }}_android_arm64
           path: .
 
-      - name: 解压并显示
+      - name: 解压 zip (如果勾选 packages)
+        if: inputs.upload_packages == true
         run: |
           mkdir -p release_contents
           unzip -o blutter_dartvm${{ env.DART_VERSION }}_android_arm64.zip -d release_contents/
           echo "=== 解压后的文件结构 ==="
           find release_contents -type f | head -20
-          echo "=== 文件大小 ==="
-          du -sh release_contents
+          mv release_contents/* .
+
+      - name: 显示构建产物
+        run: |
+          echo "=== 文件列表 ==="
+          ls -lh .
+          if [ -f "blutter_dartvm${{ env.DART_VERSION }}_android_arm64" ]; then
+            echo "二进制文件：blutter_dartvm${{ env.DART_VERSION }}_android_arm64"
+            file blutter_dartvm${{ env.DART_VERSION }}_android_arm64
+          fi
+          if [ -d "packages" ]; then
+            echo "Packages 目录:"
+            find packages -type f | head -10
+          fi
 
       - name: 创建 Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.DART_VERSION }}
           name: blutter ${{ env.DART_VERSION }}
-          files: blutter_dartvm${{ env.DART_VERSION }}_android_arm64.zip
+          files: |
+            blutter_dartvm${{ env.DART_VERSION }}_android_arm64
+            ${{ inputs.upload_packages && 'packages/**' || '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
