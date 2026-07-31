@@ -159,21 +159,19 @@ set(CMAKE_PREFIX_PATH "/usr/aarch64-linux-gnu")
 
 
 def fix_python312_compatibility(clone_dir):
-    """Fix Python 3.12 compatibility for old Dart versions (imp module removed)"""
+    """Fix Python 3.12 compatibility for old Dart versions"""
     utils_path = clone_dir / "tools" / "utils.py"
     if not utils_path.exists():
         return
     
     content = utils_path.read_text()
+    needs_fix = False
     
-    # Check if imp module is used
-    if "import imp" not in content:
-        return
-    
-    print("[*] Fixing Python 3.12 compatibility...")
-    
-    # Replace imp with importlib
-    imp_replacement = """import importlib.util
+    # Check if imp module is used (old Dart versions)
+    if "import imp" in content:
+        needs_fix = True
+        # Replace imp with importlib
+        imp_replacement = """import importlib.util
 import importlib.machinery
 
 def load_source(modname, filename):
@@ -183,16 +181,21 @@ def load_source(modname, filename):
     loader.exec_module(module)
     return module
 """
+        content = content.replace("import imp\n", imp_replacement)
+        content = content.replace("imp.load_source", "load_source")
     
-    # Replace invalid escape sequences with raw strings
-    content = content.replace("import imp\n", imp_replacement)
-    content = content.replace("imp.load_source", "load_source")
-    content = content.replace(" ' awk ", " r' awk ")
-    content = content.replace("match_against('", "match_against(r'")
-    content = content.replace("re.search('", "re.search(r'")
+    # Fix invalid escape sequences in regex patterns (Python 3.12+)
+    if "match_against('" in content or 'search("' in content:
+        needs_fix = True
+        # Convert escape sequences to raw strings
+        content = content.replace("match_against('", "match_against(r'")
+        content = content.replace("re.search('", "re.search(r'")
+        content = content.replace('match_against("', 'match_against(r"')
+        content = content.replace('re.search("', 're.search(r"')
     
-    utils_path.write_text(content)
-    print("[+] Python 3.12 compatibility fixed")
+    if needs_fix:
+        utils_path.write_text(content)
+        print("[+] Python 3.12 compatibility fixed")
 
 
 def clone_dart_sdk(version):
