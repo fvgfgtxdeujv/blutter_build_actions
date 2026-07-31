@@ -203,19 +203,31 @@ def clone_dart_sdk(version):
     if clone_dir.exists():
         shutil.rmtree(clone_dir)
 
-    # Full clone to avoid missing files/issues
+    # Full shallow clone for reliability
     run([GIT_CMD, "clone", "-c", "advice.detachedHead=false",
          "-b", version, "--depth", "1",
-         "--sparse",
          DART_GIT_URL, str(clone_dir)])
 
-    run([GIT_CMD, "sparse-checkout", "set",
-         "runtime", "tools", "third_party/double-conversion"], cwd=clone_dir)
-
-    # Remove loose files at root
-    for f in clone_dir.iterdir():
-        if f.is_file():
-            f.unlink()
+    # Remove unnecessary directories to save space (keep runtime, tools, third_party/double-conversion)
+    for dir_name in [".git", ".github", "CHANGELOG.md", "CONTRIBUTING.md", 
+                     "README.md", "analysis_options.yaml", "bin", "docs", "examples",
+                     "pkg", "samples", "tests"]:
+        target = clone_dir / dir_name
+        if target.exists():
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+    
+    # Remove third_party except double-conversion
+    third_party = clone_dir / "third_party"
+    if third_party.exists():
+        for item in third_party.iterdir():
+            if item.name != "double-conversion":
+                if item.is_dir():
+                    shutil.rmtree(item)
+                else:
+                    item.unlink()
 
     # Fix Python 3.12 compatibility for old Dart versions
     fix_python312_compatibility(clone_dir)
