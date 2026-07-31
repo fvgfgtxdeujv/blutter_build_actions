@@ -196,16 +196,17 @@ def load_source(modname, filename):
 
 
 def clone_dart_sdk(version):
-    """Clone Dart SDK at specific version (with sparse checkout)"""
+    """Clone Dart SDK at specific version"""
     print(f"[*] Cloning Dart SDK {version}...")
     clone_dir = SDK_DIR / f"v{version}"
 
     if clone_dir.exists():
         shutil.rmtree(clone_dir)
 
+    # Full clone to avoid missing files/issues
     run([GIT_CMD, "clone", "-c", "advice.detachedHead=false",
          "-b", version, "--depth", "1",
-         "--filter=blob:none", "--sparse",
+         "--sparse",
          DART_GIT_URL, str(clone_dir)])
 
     run([GIT_CMD, "sparse-checkout", "set",
@@ -218,13 +219,6 @@ def clone_dart_sdk(version):
 
     # Fix Python 3.12 compatibility for old Dart versions
     fix_python312_compatibility(clone_dir)
-
-    # Fetch VERSION file with full content (required for make_version.py)
-    # The sparse checkout may not include full file content
-    version_file = clone_dir / "tools" / "VERSION"
-    if not version_file.exists() or version_file.stat().st_size < 10:
-        run([GIT_CMD, "fetch", "origin", version, "--depth=1"], cwd=clone_dir)
-        run([GIT_CMD, "checkout", "FETCH_HEAD", "--", "tools/VERSION"], cwd=clone_dir)
 
     # Generate version.cc
     run([sys.executable, "tools/make_version.py",
