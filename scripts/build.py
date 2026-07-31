@@ -185,13 +185,11 @@ def load_source(modname, filename):
         content = content.replace("imp.load_source", "load_source")
     
     # Fix invalid escape sequences in regex patterns (Python 3.12+)
-    if "match_against('" in content or 'search("' in content:
+    # Only fix specific patterns like ' awk ' that are not proper regex
+    # DO NOT fix \\d patterns as they are already correctly escaped
+    if " ' awk " in content:
         needs_fix = True
-        # Convert escape sequences to raw strings
-        content = content.replace("match_against('", "match_against(r'")
-        content = content.replace("re.search('", "re.search(r'")
-        content = content.replace('match_against("', 'match_against(r"')
-        content = content.replace('re.search("', 're.search(r"')
+        content = content.replace(" ' awk ", " r' awk ")
     
     if needs_fix:
         utils_path.write_text(content)
@@ -235,10 +233,45 @@ def clone_dart_sdk(version):
     # Fix Python 3.12 compatibility for old Dart versions
     fix_python312_compatibility(clone_dir)
 
-    # Generate version.cc
-    run([sys.executable, "tools/make_version.py",
-         "--output", "runtime/vm/version.cc",
-         "--input", "runtime/vm/version_in.cc"], cwd=clone_dir)
+    # Generate version.cc directly (bypass make_version.py issues)
+    version_cc = clone_dir / "runtime" / "vm" / "version.cc"
+    version_cc.write_text('''// Copyright (c) 2012, the Dart project authors. Please see the AUTHORS file
+// for details. All rights reserved. Use of this source code is governed by a
+// BSD-style license that can be found in the LICENSE file.
+
+#include "vm/version.h"
+#include "vm/globals.h"
+
+namespace dart {
+
+const char* Version::String() {
+  return str_;
+}
+
+const char* Version::SnapshotString() {
+  return snapshot_hash_;
+}
+
+const char* Version::CommitString() {
+  return commit_;
+}
+
+const char* Version::SdkHash() {
+  return git_short_hash_;
+}
+
+const char* Version::Channel() {
+  return channel_;
+}
+
+const char* Version::snapshot_hash_ = "";
+const char* Version::str_ = "''' + version + ''' (stable) on "' kHostOperatingSystemName '_' kTargetArchitectureName '"';
+const char* Version::commit_ = "''' + version + '''";
+const char* Version::git_short_hash_ = "";
+const char* Version::channel_ = "stable";
+
+}  // namespace dart
+''')
 
     print(f"[+] Dart SDK cloned to {clone_dir}")
 
