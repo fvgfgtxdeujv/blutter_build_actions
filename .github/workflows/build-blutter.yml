@@ -6,6 +6,11 @@ on:
       dart_version:
         description: 'Dart version (e.g. 3.3.4, 3.4.2, 3.5.2)'
         required: true
+      upload_packages:
+        description: 'Upload packages directory (Dart VM headers and static library)'
+        type: boolean
+        default: true
+        required: false
 
 permissions:
   contents: write
@@ -71,7 +76,7 @@ jobs:
           name: blutter-${{ env.DART_VERSION }}
           path: |
             bin/
-            packages/
+            ${{ inputs.upload_packages && 'packages/' || '' }}
 
   release:
     name: Create Release
@@ -90,8 +95,12 @@ jobs:
         run: |
           echo "=== Binary files ==="
           ls -la bin/
-          echo "=== Packages structure ==="
-          find packages -type f | head -20
+          if [ "${{ inputs.upload_packages }}" == "true" ]; then
+            echo "=== Packages structure ==="
+            find packages -type f | head -20
+          else
+            echo "=== Packages not uploaded (upload_packages=false) ==="
+          fi
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -100,6 +109,6 @@ jobs:
           name: blutter ${{ env.DART_VERSION }}
           files: |
             bin/*
-            packages/*
+            ${{ inputs.upload_packages && 'packages/*' || '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
