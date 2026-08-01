@@ -1,4 +1,4 @@
-name: 构建 Dart 版本
+name: 批量构建 Blutter
 
 on:
   repository_dispatch:

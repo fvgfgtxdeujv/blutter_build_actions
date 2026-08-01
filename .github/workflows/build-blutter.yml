@@ -1,10 +1,10 @@
-name: 构建 Blutter 二进制文件
+name: 构建 Blutter（单版本）
 
 on:
   workflow_dispatch:
     inputs:
       dart_version:
-        description: 'Dart 版本（如 3.3.4, 3.4.2, 3.5.2）'
+        description: 'Dart 版本（单个，如 3.3.4）'
         required: true
       upload_packages:
         description: '上传 packages 目录（Dart VM 头文件和静态库）'
