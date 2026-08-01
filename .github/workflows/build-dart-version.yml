@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       dart_versions:
-        description: 'Dart 版本列表，逗号分隔（如 3.3.4, 3.4.2, 3.5.2 或 [3.3.4, 3.4.2]）'
+        description: 'Dart 版本列表，逗号分隔（如 3.3.4, 3.4.2, 3.5.2 或 [3.3.4, 3.4.2]）；超过 20 个版本时自动分片并行'
         required: true
 
 permissions:
@@ -16,27 +16,28 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       versions: ${{ steps.prepare.outputs.versions }}
+      workers: ${{ steps.prepare.outputs.workers }}
     steps:
-      - name: 解析版本列表
+      - name: 解析版本列表并计算 worker 数
         id: prepare
         run: |
           # 支持 "[3.3.4, 3.4.2]" 或 "3.3.4, 3.4.2" 格式
           VERSIONS=$(echo "${{ inputs.dart_versions }}" | python3 -c "import json,sys; raw=sys.stdin.read().strip().strip('[]'); vs=[v.strip() for v in raw.split(',') if v.strip()]; print(json.dumps(vs))")
           echo "versions=$VERSIONS" >> $GITHUB_OUTPUT
+          # 版本数超过 20 时固定 20 个 worker 分片并行，否则每版本一个 worker
+          echo "workers=$(python3 -c "import json; vs=json.loads('$VERSIONS'); print(json.dumps(list(range(1, min(20, len(vs)) + 1))))")" >> $GITHUB_OUTPUT
           echo "待构建版本: $VERSIONS"
 
   build:
-    name: 构建 Dart ${{ matrix.version }}
+    name: 构建 Worker ${{ matrix.worker }}
     needs: prepare
     if: needs.prepare.outputs.versions != '[]'
     strategy:
       fail-fast: false
-      max-parallel: 20
       matrix:
-        version: ${{ fromJson(needs.prepare.outputs.versions) }}
+        worker: ${{ fromJson(needs.prepare.outputs.workers) }}
     runs-on: ubuntu-24.04-arm
     env:
-      DART_VERSION: ${{ matrix.version }}
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 5G
       CCACHE_COMPILERCHECK: "none"
@@ -49,7 +50,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ env.DART_VERSION }}
+          key: ccache-build
           restore-keys: ccache-
 
       - name: 安装依赖
@@ -66,23 +67,26 @@ jobs:
           ccache -M ${{ env.CCACHE_MAXSIZE }}
           ccache -s
 
-      - name: 克隆 Dart SDK
-        run: python3 scripts/build.py clone-dart "${{ env.DART_VERSION }}"
+      - name: 计算本 worker 的版本分片
+        id: shard
+        run: |
+          SUBSET=$(python3 -c "import json; versions=json.loads('${{ needs.prepare.outputs.versions }}'); workers=json.loads('${{ needs.prepare.outputs.workers }}'); idx=${{ matrix.worker }}-1; n=len(workers); print(' '.join(versions[idx::n]))")
+          echo "本 worker 负责版本: $SUBSET"
+          echo "subset=$SUBSET" >> $GITHUB_OUTPUT
 
-      - name: 生成 CMake 源文件
-        run: python3 scripts/build.py generate-sources "${{ env.DART_VERSION }}"
-
-      - name: 构建 Dart VM
-        run: python3 scripts/build.py build-dartvm "${{ env.DART_VERSION }}" --arch aarch64
-
-      - name: 构建 blutter
-        run: python3 scripts/build.py build-blutter "${{ env.DART_VERSION }}" --arch aarch64
-
-      - name: 创建 Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.DART_VERSION }}
-          name: blutter ${{ env.DART_VERSION }}
-          files: bin/blutter_dartvm${{ env.DART_VERSION }}_android_arm64
+      - name: 构建并发布分片版本
+        run: |
+          for ver in ${{ steps.shard.outputs.subset }}; do
+            echo "===== 开始构建 Dart $ver ====="
+            if python3 scripts/build.py clone-dart "$ver" && \
+               python3 scripts/build.py generate-sources "$ver" && \
+               python3 scripts/build.py build-dartvm "$ver" --arch aarch64 && \
+               python3 scripts/build.py build-blutter "$ver" --arch aarch64; then
+              echo "===== 发布 $ver ====="
+              gh release create "$ver" "bin/blutter_dartvm${ver}_android_arm64" --title "blutter $ver" 2>&1 || echo "Release 创建失败（可能已存在）: $ver"
+            else
+              echo "===== 构建失败，跳过: $ver ====="
+            fi
+          done
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
