@@ -1,17 +1,14 @@
-name: 更新 Dart 版本列表
+name: 获取待构建 Dart 版本
 
 on:
-  schedule:
-    - cron: '0 2 * * *'
   workflow_dispatch:
 
 permissions:
-  contents: write
-  actions: write
+  contents: read
 
 jobs:
   update:
-    name: 获取并触发构建
+    name: 获取待构建版本列表
     runs-on: ubuntu-24.04
     steps:
       - name: 计算待构建 Dart 版本
@@ -39,14 +36,8 @@ jobs:
           echo "待构建版本数: $(echo "$VERSIONS" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
           echo "versions=$VERSIONS" >> $GITHUB_OUTPUT
 
-      - name: 触发构建 workflow
-        if: steps.list.outputs.versions != '[]'
+      - name: 输出待构建版本列表
         run: |
-          VERSIONS='${{ steps.list.outputs.versions }}'
-          curl -X POST \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            https://api.github.com/repos/${{ github.repository }}/dispatches \
-            -d "{\"event_type\": \"build-dart\", \"client_payload\": {\"versions\": $VERSIONS}}"
-          echo "已触发构建 ${{ steps.list.outputs.versions }}"
+          echo "请在「批量构建 Blutter」workflow 中手动输入以下版本列表："
+          echo
+          echo '${{ steps.list.outputs.versions }}'

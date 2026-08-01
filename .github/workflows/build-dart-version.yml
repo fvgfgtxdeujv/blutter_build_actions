@@ -1,8 +1,6 @@
 name: 批量构建 Blutter
 
 on:
-  repository_dispatch:
-    types: [build-dart]
   workflow_dispatch:
     inputs:
       dart_versions:
@@ -22,13 +20,8 @@ jobs:
       - name: 解析版本列表
         id: prepare
         run: |
-          if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
-            # 从 update workflow 的 client_payload 获取版本列表
-            VERSIONS='${{ toJson(github.event.client_payload.versions) }}'
-          else
-            # 手动触发：支持 "[3.3.4, 3.4.2]" 或 "3.3.4, 3.4.2" 格式
-            VERSIONS=$(echo "${{ inputs.dart_versions }}" | python3 -c "import json,sys; raw=sys.stdin.read().strip().strip('[]'); vs=[v.strip() for v in raw.split(',') if v.strip()]; print(json.dumps(vs))")
-          fi
+          # 支持 "[3.3.4, 3.4.2]" 或 "3.3.4, 3.4.2" 格式
+          VERSIONS=$(echo "${{ inputs.dart_versions }}" | python3 -c "import json,sys; raw=sys.stdin.read().strip().strip('[]'); vs=[v.strip() for v in raw.split(',') if v.strip()]; print(json.dumps(vs))")
           echo "versions=$VERSIONS" >> $GITHUB_OUTPUT
           echo "待构建版本: $VERSIONS"
 
