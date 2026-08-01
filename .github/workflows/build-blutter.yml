@@ -11,6 +11,11 @@ on:
         type: boolean
         default: false
         required: false
+      upload_release:
+        description: '上传到 GitHub Release（关闭则仅上传 Artifacts）'
+        type: boolean
+        default: true
+        required: false
 
 permissions:
   contents: write
@@ -90,6 +95,7 @@ jobs:
           mv bin/blutter_dartvm${{ env.DART_VERSION }}_android_arm64 . 2>/dev/null || true
 
       - name: 创建 Release
+        if: inputs.upload_release == true
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.DART_VERSION }}
@@ -97,3 +103,11 @@ jobs:
           files: ${{ inputs.upload_packages && 'blutter_dartvm*.zip' || 'blutter_dartvm*' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 上传 Artifacts
+        if: inputs.upload_release == false
+        uses: actions/upload-artifact@v5
+        with:
+          name: blutter_dartvm${{ env.DART_VERSION }}_android_arm64
+          path: ${{ inputs.upload_packages && 'blutter_dartvm*.zip' || 'blutter_dartvm*' }}
+          if-no-files-found: error

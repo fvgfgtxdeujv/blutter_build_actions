@@ -29,7 +29,8 @@
 2. 填写参数：
    - **Dart version**（必填）：单个版本，如 `3.3.4`
    - **Upload packages**（可选）：是否上传 Dart VM 开发包（默认不上传）
-3. 编译完成后从对应 Release 下载文件
+   - **Upload release**（可选）：是否上传到 GitHub Release（默认开启）；关闭时构建产物仅以 Artifacts 形式提供
+3. 编译完成后从对应 Release 或 Artifacts 下载文件
 
 ### 2. 批量构建 Blutter
 
