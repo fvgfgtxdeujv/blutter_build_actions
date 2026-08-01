@@ -1,0 +1,24 @@
+name: 清空 Releases
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  clear:
+    name: 删除全部 Release 及 tag
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 删除所有 Release 和对应 tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release list --limit 1000 --json tagName -q '.[].tagName' > /tmp/tags.txt
+          COUNT=$(wc -l < /tmp/tags.txt)
+          echo "共找到 $COUNT 个 Release"
+          while IFS= read -r tag; do
+            gh release delete "$tag" --yes --cleanup-tag || echo "删除失败: $tag"
+          done < /tmp/tags.txt
+          echo "剩余 Release 数: $(gh release list --limit 1000 --json tagName -q '.[] | length')"
