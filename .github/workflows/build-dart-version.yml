@@ -20,9 +20,11 @@ jobs:
     steps:
       - name: 解析版本列表并计算 worker 数
         id: prepare
+        env:
+          INPUT_VERSIONS: ${{ inputs.dart_versions }}
         run: |
           # 支持 "[3.3.4, 3.4.2]" 或 "3.3.4, 3.4.2" 格式
-          VERSIONS=$(echo "${{ inputs.dart_versions }}" | python3 -c "import json,sys; raw=sys.stdin.read().strip().strip('[]'); vs=[v.strip() for v in raw.split(',') if v.strip()]; print(json.dumps(vs))")
+          VERSIONS=$(echo "$INPUT_VERSIONS" | python3 -c "import json,sys; raw=sys.stdin.read().strip().strip('[]'); vs=[v.strip() for v in raw.split(',') if v.strip()]; print(json.dumps(vs))")
           echo "versions=$VERSIONS" >> $GITHUB_OUTPUT
           # 版本数超过 20 时固定 20 个 worker 分片并行，否则每版本一个 worker
           echo "workers=$(python3 -c "import json; vs=json.loads('$VERSIONS'); print(json.dumps(list(range(1, min(20, len(vs)) + 1))))")" >> $GITHUB_OUTPUT
@@ -69,8 +71,11 @@ jobs:
 
       - name: 计算本 worker 的版本分片
         id: shard
+        env:
+          ALL_VERSIONS: ${{ needs.prepare.outputs.versions }}
+          WORKER_LIST: ${{ needs.prepare.outputs.workers }}
         run: |
-          SUBSET=$(python3 -c "import json; versions=json.loads('${{ needs.prepare.outputs.versions }}'); workers=json.loads('${{ needs.prepare.outputs.workers }}'); idx=${{ matrix.worker }}-1; n=len(workers); print(' '.join(versions[idx::n]))")
+          SUBSET=$(python3 -c "import json,os; versions=json.loads(os.environ['ALL_VERSIONS']); workers=json.loads(os.environ['WORKER_LIST']); idx=${{ matrix.worker }}-1; n=len(workers); print(' '.join(versions[idx::n]))")
           echo "本 worker 负责版本: $SUBSET"
           echo "subset=$SUBSET" >> $GITHUB_OUTPUT
 
