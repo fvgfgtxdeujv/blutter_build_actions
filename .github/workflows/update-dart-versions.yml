@@ -34,13 +34,9 @@ jobs:
           comm -23 /tmp/filtered.txt /tmp/existing.txt > /tmp/todo.txt
 
           # 转为 JSON 数组
-          python3 - <<'EOF' > /tmp/versions.json
-import json
-versions = [l.strip() for l in open('/tmp/todo.txt') if l.strip()]
-print(json.dumps(versions))
-EOF
-          VERSIONS=$(cat /tmp/versions.json)
-          echo "待构建版本数: $(python3 -c "import json; print(len(json.load(open('/tmp/versions.json'))))")"
+          VERSIONS=$(python3 -c "import json; versions = [l.strip() for l in open('/tmp/todo.txt') if l.strip()]; print(json.dumps(versions))")
+          echo "$VERSIONS" > /tmp/versions.json
+          echo "待构建版本数: $(echo "$VERSIONS" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
           echo "versions=$VERSIONS" >> $GITHUB_OUTPUT
 
       - name: 触发构建 workflow
