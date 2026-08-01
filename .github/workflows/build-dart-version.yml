@@ -75,7 +75,7 @@ jobs:
           ALL_VERSIONS: ${{ needs.prepare.outputs.versions }}
           WORKER_LIST: ${{ needs.prepare.outputs.workers }}
         run: |
-          SUBSET=$(python3 -c "import json,os; versions=json.loads(os.environ['ALL_VERSIONS']); workers=json.loads(os.environ['WORKER_LIST']); idx=${{ matrix.worker }}-1; n=len(workers); print(' '.join(versions[idx::n]))")
+          SUBSET=$(python3 -c "import json,os; versions=json.loads(os.environ['ALL_VERSIONS']); n=len(json.loads(os.environ['WORKER_LIST'])); idx=${{ matrix.worker }}-1; k,r=divmod(len(versions),n); s=idx*k+min(idx,r); e=s+k+(1 if idx<r else 0); print(' '.join(versions[s:e]))")
           echo "本 worker 负责版本: $SUBSET"
           echo "subset=$SUBSET" >> $GITHUB_OUTPUT
 
