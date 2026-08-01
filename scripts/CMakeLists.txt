@@ -18,8 +18,16 @@ elseif (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
 	set(CMAKE_OSX_DEPLOYMENT_TARGET "13.0" CACHE STRING "" FORCE)
 	execute_process(COMMAND brew --prefix icu4c OUTPUT_VARIABLE BREW_ICU)
 	string(STRIP "${BREW_ICU}" ICU_ROOT)
+else()
+	# 优先静态链接 ICU，避免产物依赖系统 libicuuc.so
+	set(CMAKE_FIND_LIBRARY_SUFFIXES ".a" ${CMAKE_FIND_LIBRARY_SUFFIXES})
 endif()
 find_package(ICU REQUIRED uc)
+# icudata 静态库是链接 icuuc 的必需依赖
+find_library(ICU_DATA_LIBRARY NAMES icudata)
+if (ICU_DATA_LIBRARY)
+	list(APPEND ICU_LIBRARIES ${ICU_DATA_LIBRARY})
+endif()
 
 string(SUBSTRING ${PROJECT_NAME} 6 -1 DART_VERSION)
 
@@ -110,7 +118,7 @@ target_include_directories(${LIBNAME} INTERFACE
 if (MSVC)
 	target_link_libraries(${LIBNAME} PUBLIC ${ICU_LIBRARIES})
 else()
-	target_link_libraries(${LIBNAME} PUBLIC dl pthread ${ICU_LIBRARIES})
+	target_link_libraries(${LIBNAME} PUBLIC dl pthread m ${ICU_LIBRARIES})
 endif()
 
 # install lib

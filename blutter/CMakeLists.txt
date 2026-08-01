@@ -30,11 +30,20 @@ if (MSVC)
 	set_target_properties(capstone PROPERTIES IMPORTED_LOCATION "${PROJECT_SOURCE_DIR}/../external/capstone/capstone.dll")
 	set_target_properties(capstone PROPERTIES IMPORTED_IMPLIB "${PROJECT_SOURCE_DIR}/../external/capstone/capstone_dll.lib")
 	target_include_directories(capstone INTERFACE "${PROJECT_SOURCE_DIR}/../external/capstone/include/capstone")
+	set(CAPSTONE_LIB capstone)
 else()
 	include(FindPkgConfig)
 	pkg_search_module(CAPSTONE REQUIRED capstone)
 	link_directories(${CAPSTONE_LIBDIR})
 	include_directories(AFTER ${CAPSTONE_INCLUDEDIR})
+	# 静态链接 capstone，避免产物依赖系统 libcapstone.so
+	set(CMAKE_FIND_LIBRARY_SUFFIXES ".a" ${CMAKE_FIND_LIBRARY_SUFFIXES})
+	find_library(CAPSTONE_STATIC_LIB NAMES capstone HINTS ${CAPSTONE_LIBDIR} NO_DEFAULT_PATH)
+	if (CAPSTONE_STATIC_LIB)
+		set(CAPSTONE_LIB ${CAPSTONE_STATIC_LIB})
+	else()
+		set(CAPSTONE_LIB capstone)
+	endif()
 endif()
 
 # Add source to this project's executable.
@@ -43,7 +52,7 @@ include(sourcelist.cmake)
 list(TRANSFORM SRCS PREPEND "${SRCDIR}/")
 add_executable(${BINNAME} ${SRCS})
 
-target_link_libraries(${BINNAME} PRIVATE ${DARTLIB} capstone)
+target_link_libraries(${BINNAME} PRIVATE ${DARTLIB} ${CAPSTONE_LIB})
 
 target_precompile_headers(${BINNAME} PRIVATE "${SRCDIR}/pch.h")
 
