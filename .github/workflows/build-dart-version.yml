@@ -5,8 +5,8 @@ on:
     types: [build-dart]
   workflow_dispatch:
     inputs:
-      dart_version:
-        description: 'Dart 版本（如 3.3.4, 3.4.2, 3.5.2）'
+      dart_versions:
+        description: 'Dart 版本列表，逗号分隔（如 3.3.4, 3.4.2, 3.5.2 或 [3.3.4, 3.4.2]）'
         required: true
 
 permissions:
@@ -26,8 +26,8 @@ jobs:
             # 从 update workflow 的 client_payload 获取版本列表
             VERSIONS='${{ toJson(github.event.client_payload.versions) }}'
           else
-            # 手动触发单个版本
-            VERSIONS="[\"${{ inputs.dart_version }}\"]"
+            # 手动触发：支持 "[3.3.4, 3.4.2]" 或 "3.3.4, 3.4.2" 格式
+            VERSIONS=$(echo "${{ inputs.dart_versions }}" | python3 -c "import json,sys; raw=sys.stdin.read().strip().strip('[]'); vs=[v.strip() for v in raw.split(',') if v.strip()]; print(json.dumps(vs))")
           fi
           echo "versions=$VERSIONS" >> $GITHUB_OUTPUT
           echo "待构建版本: $VERSIONS"
