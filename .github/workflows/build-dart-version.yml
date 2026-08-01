@@ -4,40 +4,15 @@ on:
   workflow_dispatch:
     inputs:
       dart_versions:
-        description: 'Dart 版本列表，逗号分隔（如 3.3.4, 3.4.2, 3.5.2 或 [3.3.4, 3.4.2]）；超过 20 个版本时自动分片并行'
+        description: 'Dart 版本列表，逗号分隔（如 3.3.4, 3.4.2, 3.5.2 或 [3.3.4, 3.4.2]）；按版本号顺序逐个构建发布'
         required: true
 
 permissions:
   contents: write
 
 jobs:
-  prepare:
-    name: 准备版本列表
-    runs-on: ubuntu-24.04
-    outputs:
-      versions: ${{ steps.prepare.outputs.versions }}
-      workers: ${{ steps.prepare.outputs.workers }}
-    steps:
-      - name: 解析版本列表并计算 worker 数
-        id: prepare
-        env:
-          INPUT_VERSIONS: ${{ inputs.dart_versions }}
-        run: |
-          # 支持 "[3.3.4, 3.4.2]" 或 "3.3.4, 3.4.2" 格式
-          VERSIONS=$(echo "$INPUT_VERSIONS" | python3 -c "import json,sys; raw=sys.stdin.read().strip().strip('[]'); vs=[v.strip() for v in raw.split(',') if v.strip()]; print(json.dumps(vs))")
-          echo "versions=$VERSIONS" >> $GITHUB_OUTPUT
-          # 版本数超过 20 时固定 20 个 worker 分片并行，否则每版本一个 worker
-          echo "workers=$(python3 -c "import json; vs=json.loads('$VERSIONS'); print(json.dumps(list(range(1, min(20, len(vs)) + 1))))")" >> $GITHUB_OUTPUT
-          echo "待构建版本: $VERSIONS"
-
   build:
-    name: 构建 Worker ${{ matrix.worker }}
-    needs: prepare
-    if: needs.prepare.outputs.versions != '[]'
-    strategy:
-      fail-fast: false
-      matrix:
-        worker: ${{ fromJson(needs.prepare.outputs.workers) }}
+    name: 顺序构建并发布
     runs-on: ubuntu-24.04-arm
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
@@ -47,6 +22,16 @@ jobs:
       CCACHE_NOHARDLINK: "true"
     steps:
       - uses: actions/checkout@v5
+
+      - name: 解析并排序版本列表
+        id: prepare
+        env:
+          INPUT_VERSIONS: ${{ inputs.dart_versions }}
+        run: |
+          # 支持 "[3.3.4, 3.4.2]" 或 "3.3.4, 3.4.2" 格式，并按版本号排序
+          VERSIONS=$(echo "$INPUT_VERSIONS" | python3 -c "import json,sys; raw=sys.stdin.read().strip().strip('[]'); vs=[v.strip() for v in raw.split(',') if v.strip()]; vs.sort(key=lambda v: tuple(int(x) for x in v.split('.'))); print(json.dumps(vs))")
+          echo "versions=$VERSIONS" >> $GITHUB_OUTPUT
+          echo "按版本号排序后的构建顺序: $VERSIONS"
 
       - name: 恢复 CCache 缓存
         uses: actions/cache@v5
@@ -69,19 +54,13 @@ jobs:
           ccache -M ${{ env.CCACHE_MAXSIZE }}
           ccache -s
 
-      - name: 计算本 worker 的版本分片
-        id: shard
+      - name: 按版本号顺序构建并发布
         env:
-          ALL_VERSIONS: ${{ needs.prepare.outputs.versions }}
-          WORKER_LIST: ${{ needs.prepare.outputs.workers }}
+          VERSIONS: ${{ steps.prepare.outputs.versions }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          SUBSET=$(python3 -c "import json,os; versions=json.loads(os.environ['ALL_VERSIONS']); n=len(json.loads(os.environ['WORKER_LIST'])); idx=${{ matrix.worker }}-1; k,r=divmod(len(versions),n); s=idx*k+min(idx,r); e=s+k+(1 if idx<r else 0); print(' '.join(versions[s:e]))")
-          echo "本 worker 负责版本: $SUBSET"
-          echo "subset=$SUBSET" >> $GITHUB_OUTPUT
-
-      - name: 构建并发布分片版本
-        run: |
-          for ver in ${{ steps.shard.outputs.subset }}; do
+          python3 -c "import json,os; print('\n'.join(json.loads(os.environ['VERSIONS'])))" > /tmp/versions.txt
+          while IFS= read -r ver; do
             echo "===== 开始构建 Dart $ver ====="
             if python3 scripts/build.py clone-dart "$ver" && \
                python3 scripts/build.py generate-sources "$ver" && \
@@ -89,9 +68,9 @@ jobs:
                python3 scripts/build.py build-blutter "$ver" --arch aarch64; then
               echo "===== 发布 $ver ====="
               gh release create "$ver" "bin/blutter_dartvm${ver}_android_arm64" --title "blutter $ver" 2>&1 || echo "Release 创建失败（可能已存在）: $ver"
+              echo "===== $ver 完成，开始下一个版本 ====="
             else
               echo "===== 构建失败，跳过: $ver ====="
             fi
-          done
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          done < /tmp/versions.txt
+          echo "===== 全部版本处理完毕 ====="
