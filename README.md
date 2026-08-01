@@ -1,6 +1,6 @@
 # Blutter 构建工作流
 
-用于构建 [blutter](https://github.com/worawit/blutter) 二进制文件的 GitHub Actions 工作流。
+用于构建 [blutter](https://github.com/worawit/blutter) 二进制文件的 GitHub Actions 工作流，支持单版本构建与多版本批量构建。
 
 ## 产物
 
@@ -21,12 +21,34 @@
 
 ## 用法
 
-1. Fork 本仓库到你的 GitHub
-2. 进入仓库 → Actions → "Build Blutter Binary" → **Run workflow**
-3. 填写参数：
-   - **Dart version**（必填）：如 `3.3.4`、`3.4.2`
+### 1. 构建 Blutter（单版本）
+
+构建单个 Dart 版本的 blutter 二进制。
+
+1. 进入仓库 → Actions → **构建 Blutter（单版本）** → **Run workflow**
+2. 填写参数：
+   - **Dart version**（必填）：单个版本，如 `3.3.4`
    - **Upload packages**（可选）：是否上传 Dart VM 开发包（默认不上传）
-4. 编译完成后从 Release 或 Artifacts 下载文件
+3. 编译完成后从对应 Release 下载文件
+
+### 2. 批量构建 Blutter
+
+一次构建多个 Dart 版本，每个版本生成独立的 Release。
+
+1. 进入仓库 → Actions → **批量构建 Blutter** → **Run workflow**
+2. 填写参数：
+   - **Dart versions**（必填）：逗号分隔的版本列表，如 `3.3.4, 3.4.2, 3.5.2` 或 `[3.3.4, 3.4.2]`
+3. 编译完成后从各版本对应的 Release 下载文件
+
+**分片机制**：版本数量超过 20 个时，会自动分成最多 20 个 worker job，每个 worker 负责自己分片内的版本串行构建，直到全部完成。单个版本构建失败会自动跳过，不影响其他版本。
+
+### 3. 获取待构建 Dart 版本
+
+查询所有 Dart SDK 版本中尚未构建发布的部分，避免手动遗漏。
+
+1. 进入仓库 → Actions → **获取待构建 Dart 版本** → **Run workflow**
+2. 运行结束后，日志末尾会输出待构建版本列表（JSON 数组）
+3. 复制该列表，填入「批量构建 Blutter」的 **Dart versions** 输入框手动触发
 
 ### Upload Packages 选项说明
 
