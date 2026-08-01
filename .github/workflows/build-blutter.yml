@@ -104,10 +104,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 上传 Artifacts
+      - name: 上传构建产物
         if: inputs.upload_release == false
         uses: actions/upload-artifact@v5
         with:
-          name: blutter_dartvm${{ env.DART_VERSION }}_android_arm64
+          name: Blutter 构建产物 ${{ env.DART_VERSION }}（Android ARM64）
           path: ${{ inputs.upload_packages && 'blutter_dartvm*.zip' || 'blutter_dartvm*' }}
           if-no-files-found: error
