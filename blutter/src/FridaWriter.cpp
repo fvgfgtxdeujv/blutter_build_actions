@@ -2,15 +2,44 @@
 #include "FridaWriter.h"
 #include <fstream>
 #include <filesystem>
+#include <vector>
+#include <climits>
+#include <unistd.h>
 #include "Util.h"
 
 #ifndef FRIDA_TEMPLATE_DIR
 #define FRIDA_TEMPLATE_DIR "scripts"
 #endif
 
+static std::filesystem::path FindFridaTemplate()
+{
+	const char* name = FRIDA_TEMPLATE_DIR "/frida.template.js";
+	std::vector<std::filesystem::path> candidates;
+
+	// 优先按可执行文件所在目录定位，保证产物可在任意路径运行
+	char exePath[PATH_MAX];
+	ssize_t len = readlink("/proc/self/exe", exePath, sizeof(exePath) - 1);
+	if (len != -1) {
+		exePath[len] = '\0';
+		std::filesystem::path dir = std::filesystem::path(exePath).parent_path();
+		candidates.push_back(dir / FRIDA_TEMPLATE_DIR / "frida.template.js");
+		candidates.push_back(dir.parent_path() / FRIDA_TEMPLATE_DIR / "frida.template.js");
+	}
+
+	// 最后回退到当前工作目录
+	candidates.push_back(name);
+
+	for (const auto& c : candidates) {
+		if (std::filesystem::exists(c)) {
+			return c;
+		}
+	}
+	return name;
+}
+
 void FridaWriter::Create(const char* filename)
 {
-	std::filesystem::copy_file(FRIDA_TEMPLATE_DIR "/frida.template.js", filename, std::filesystem::copy_options::overwrite_existing);
+	std::filesystem::copy_file(FindFridaTemplate(), filename, std::filesystem::copy_options::overwrite_existing);
 
 	std::ofstream of(filename, std::ios_base::app);
 

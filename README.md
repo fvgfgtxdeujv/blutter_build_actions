@@ -28,6 +28,7 @@
 1. 进入仓库 → Actions → **构建 Blutter（单版本）** → **Run workflow**
 2. 填写参数：
    - **Dart version**（必填）：单个版本，如 `3.3.4`
+   - **编译环境（Ubuntu 版本）**（下拉选择）：`22.04` 或 `24.04`，默认 `22.04`（与手机 Droidspaces 环境一致）
    - **Upload packages**（可选）：是否上传 Dart VM 开发包（默认不上传）
    - **Upload release**（可选）：是否上传到 GitHub Release（默认开启）；关闭时构建产物仅以「构建产物」（Actions Artifacts）形式提供
 3. 编译完成后从对应 Release 或构建产物中下载文件
@@ -39,9 +40,10 @@
 1. 进入仓库 → Actions → **批量构建 Blutter** → **Run workflow**
 2. 填写参数：
    - **Dart versions**（必填）：逗号分隔的版本列表，如 `3.3.4, 3.4.2, 3.5.2` 或 `[3.3.4, 3.4.2]`
+   - **编译环境（Ubuntu 版本）**（下拉选择）：`22.04` 或 `24.04`，默认 `22.04`
 3. 编译完成后从各版本对应的 Release 下载文件
 
-**分片机制**：版本数量超过 20 个时，会自动分成最多 20 个 worker job，每个 worker 负责自己分片内的版本串行构建，直到全部完成。单个版本构建失败会自动跳过，不影响其他版本。
+**构建机制**：编译直接在 GitHub 托管的 arm64 runner 上执行，可通过选择框选择 Ubuntu `22.04` 或 `24.04`；版本按号升序严格串行构建发布，单个版本构建失败自动跳过，不影响其他版本。
 
 ### 3. 获取待构建 Dart 版本
 
@@ -77,15 +79,56 @@
 - 支持压缩/非压缩指针模式
 - 自动生成对应的 Frida 脚本模板
 
+## 运行说明
+
+运行 blutter 需要 `scripts/frida.template.js`（生成 Frida 脚本的模板），Release 已附带该文件。二进制运行时按以下顺序自动定位模板：
+
+1. 可执行文件同目录下的 `scripts/frida.template.js`
+2. 可执行文件上一级目录的 `scripts/frida.template.js`
+3. 当前工作目录下的 `scripts/frida.template.js`
+
+推荐目录结构（与原版 blutter 一致，`blutter_dartvm*` 为 Release 下载的二进制）：
+
+```
+blutter/
+├── blutter_dartvm<ver>_android_arm64
+└── scripts/
+    └── frida.template.js
+```
+
+在 `blutter/` 目录内运行：
+
+```bash
+python3 blutter.py libapp.so out
+```
+
+## 构建环境
+
+编译在 GitHub 托管的 arm64 runner（`ubuntu-22.04-arm` / `ubuntu-24.04-arm`）上原生执行，无需 Docker。每个 workflow 提供「编译环境（Ubuntu 版本）」下拉选择框：
+
+| 选项 | runner | 特点 |
+|------|--------|------|
+| `22.04`（默认） | `ubuntu-22.04-arm` | 与 Android 手机 Droidspaces 容器的 Ubuntu 22.04 rootfs 一致；自动安装 gcc-13/g++-13 |
+| `24.04` | `ubuntu-24.04-arm` | 系统自带 gcc-13，无需额外工具链 |
+
+> 建议默认使用 `22.04`：编译环境与产物运行环境（Droidspaces Ubuntu 22.04 rootfs）完全一致，动态链接的库版本直接匹配。
+
+| 项 | 说明 |
+|----|------|
+| 基础系统 | Ubuntu 22.04（默认）或 24.04（可选） |
+| 编译器 | gcc-13/g++-13；22.04 由 `ppa:ubuntu-toolchain-r/test` 安装，24.04 系统自带 |
+| libstdc++ | gcc-13 提供（22.04 默认 GCC 11 不含 `<format>`，必需） |
+| ICU | 动态链接系统 `libicuuc.so`（22.04 自带 libicu70，与运行环境一致） |
+| capstone | 动态链接系统 `libcapstone.so`（运行环境需安装 libcapstone） |
+
 ## 依赖
 
-构建过程自动安装以下依赖：
-- CMake
-- Ninja
-- Clang/LLVM
+runner 启动后自动安装以下依赖（`22.04` 额外安装 gcc-13 工具链）：
+- CMake / Ninja
 - libcapstone-dev（反汇编库）
 - libicu-dev（国际化库）
 - CCache（编译缓存加速）
+- Python3 / pip / pyelftools / requests
 
 ## 输出文件说明
 
