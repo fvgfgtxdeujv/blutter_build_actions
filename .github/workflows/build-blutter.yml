@@ -121,7 +121,7 @@ jobs:
         with:
           tag_name: ${{ env.DART_VERSION }}
           name: blutter ${{ env.DART_VERSION }}
-          files: ${{ inputs.upload_packages && 'blutter_dartvm*.zip' || 'blutter_dartvm* scripts/frida.template.js' }}
+          files: ${{ inputs.upload_packages && 'blutter_dartvm*.zip' || format('blutter_dartvm*{0}scripts/frida.template.js', '\n') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -130,5 +130,5 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: Blutter 构建产物 ${{ env.DART_VERSION }}（Android ARM64）
-          path: ${{ inputs.upload_packages && 'blutter_dartvm*.zip' || 'blutter_dartvm* scripts/frida.template.js' }}
+          path: ${{ inputs.upload_packages && 'blutter_dartvm*.zip' || format('blutter_dartvm*{0}scripts/frida.template.js', '\n') }}
           if-no-files-found: error
