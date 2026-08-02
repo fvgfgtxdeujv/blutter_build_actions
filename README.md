@@ -39,7 +39,7 @@
 
 1. 进入仓库 → Actions → **批量构建 Blutter** → **Run workflow**
 2. 填写参数：
-   - **Dart versions**（必填）：逗号分隔的版本列表，如 `3.3.4, 3.4.2, 3.5.2` 或 `[3.3.4, 3.4.2]`
+   - **Dart versions**（必填）：JSON 数组格式的版本列表，如 `[3.3.4, 3.4.2, 3.5.2]`
 3. 编译完成后从各版本对应的 Release 下载文件
 
 每个版本 Release 包含两个二进制：
@@ -49,7 +49,7 @@
 | `blutter_dartvm<ver>_android_arm64_22` | Ubuntu 22.04（与手机 Droidspaces 环境一致） |
 | `blutter_dartvm<ver>_android_arm64_24` | Ubuntu 24.04 |
 
-**构建机制**：编译直接在 GitHub 托管的 arm64 runner（`ubuntu-22.04-arm` / `ubuntu-24.04-arm`）上并行执行；22.04 自动安装 gcc-13/g++-13，24.04 使用系统自带 gcc-13。版本按号升序严格串行构建发布，单个版本构建失败自动跳过，不影响其他版本；两个环境共享同一版本号 Release（先到者创建，后到者追加上传）。
+**构建机制**：编译直接在 GitHub 托管的 arm64 runner（`ubuntu-22.04-arm` / `ubuntu-24.04-arm`）上并行执行；每个版本与每个编译环境组合成一个独立 job，共「版本数 × 2」个 job 同时构建（如 10 个版本则在 22.04 下有 10 个 job、24.04 下也有 10 个 job 并行），单个 job 失败不影响其他 job；22.04 自动安装 gcc-13/g++-13，24.04 使用系统自带 gcc-13。两个环境共享同一版本号 Release（先到者创建，后到者追加上传）。
 
 ### 3. 获取待构建 Dart 版本
 
@@ -125,9 +125,9 @@
 
 2. 脚本自动检测 Dart 版本，并在 `$HOME/blutter/bin/` 查找对应版本的二进制：
    - **存在**：直接解析，输出到 `out` 目录
-   - **不存在**：打印所需的 Dart 版本号，提示从 Releases 下载
+   - **不存在**：自动从本仓库 Releases 下载匹配版本（自动识别系统为 22.04 还是 24.04，优先下载带 `_22` / `_24` 后缀的二进制并重命名为无后缀格式放入 bin），随后自动继续解析；若下载失败则打印所需版本号，提示手动下载
 
-3. 从 Releases 下载对应版本二进制放入 `$HOME/blutter/bin/`，重新运行命令即可解析。
+3. 若自动下载失败，从 Releases 手动下载对应版本二进制放入 `$HOME/blutter/bin/`，重新运行命令即可解析。
 
 二进制命名格式：`blutter_dartvm<版本>_android_arm64`，例如 Dart 3.4.2 对应 `blutter_dartvm3.4.2_android_arm64`。批量构建的产物带环境后缀（`_22` / `_24`），手机 Droidspaces 为 Ubuntu 22.04，建议下载 `blutter_dartvm3.4.2_android_arm64_22`，放入 bin 目录后重命名为 `blutter_dartvm3.4.2_android_arm64`。
 
