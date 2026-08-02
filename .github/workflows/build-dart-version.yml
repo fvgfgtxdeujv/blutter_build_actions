@@ -7,9 +7,9 @@ on:
         description: 'Dart 版本列表，逗号分隔或 JSON 数组（如 3.3.4, 3.4.2 或 [3.3.4, 3.4.2]）；分割成最多 20 个 worker 并行构建'
         required: true
       runner_version:
-        description: '编译环境（Ubuntu 版本）'
-        required: true
+        description: '编译环境（Ubuntu 版本，22.04 与手机 Droidspaces 环境一致）'
         type: choice
+        required: true
         default: '22.04'
         options:
           - '22.04'
