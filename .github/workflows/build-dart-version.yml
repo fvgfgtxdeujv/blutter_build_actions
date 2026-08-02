@@ -4,19 +4,37 @@ on:
   workflow_dispatch:
     inputs:
       dart_versions:
-        description: 'Dart 版本列表，JSON 数组格式（如 [3.3.4, 3.4.2, 3.5.2]）；每个版本在 22.04 和 24.04 上各启动一个并行 job 构建并发布'
+        description: 'Dart 版本列表，逗号分隔或 JSON 数组（如 3.3.4, 3.4.2 或 [3.3.4, 3.4.2]）；每个版本在 22.04 和 24.04 上各启动一个并行 job'
         required: true
 
 permissions:
   contents: write
 
 jobs:
+  prepare:
+    name: 解析版本列表
+    runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.prepare.outputs.versions }}
+    steps:
+      - name: 解析版本列表
+        id: prepare
+        env:
+          INPUT_VERSIONS: ${{ inputs.dart_versions }}
+        run: |
+          # 支持 "[3.3.4, 3.4.2]" 或 "3.3.4, 3.4.2" 格式
+          VERSIONS=$(echo "$INPUT_VERSIONS" | python3 -c "import json,sys; raw=sys.stdin.read().strip().strip('[]'); vs=[v.strip() for v in raw.split(',') if v.strip()]; print(json.dumps(vs))")
+          echo "versions=$VERSIONS" >> $GITHUB_OUTPUT
+          echo "待构建版本: $VERSIONS"
+
   build:
     name: 构建 Dart ${{ matrix.version }} (Ubuntu ${{ matrix.runner_version }})
+    needs: prepare
+    if: needs.prepare.outputs.versions != '[]'
     strategy:
       fail-fast: false
       matrix:
-        version: ${{ fromJSON(inputs.dart_versions) }}
+        version: ${{ fromJson(needs.prepare.outputs.versions) }}
         include:
           - runner_version: '22.04'
             suffix: '22'
