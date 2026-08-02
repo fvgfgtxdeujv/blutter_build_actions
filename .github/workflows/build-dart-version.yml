@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       dart_versions:
-        description: 'Dart 版本列表，逗号分隔或 JSON 数组（如 3.3.4, 3.4.2 或 [3.3.4, 3.4.2]）'
+        description: 'Dart 版本列表，逗号分隔或 JSON 数组（如 3.3.4, 3.4.2 或 [3.3.4, 3.4.2]）；分割成最多 20 个 worker 并行构建'
         required: true
       runner_version:
         description: '编译环境（Ubuntu 版本）'
@@ -19,20 +19,14 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    name: 构建并发布（Ubuntu ${{ inputs.runner_version }}）
-    runs-on: ubuntu-${{ inputs.runner_version }}-arm
-    env:
-      CCACHE_DIR: ${{ github.workspace }}/.ccache
-      CCACHE_MAXSIZE: 5G
-      CCACHE_COMPILERCHECK: "none"
-      CCACHE_NOHASHDIR: "true"
-      CCACHE_NOHARDLINK: "true"
-      RUNNER_VERSION: ${{ inputs.runner_version }}
+  prepare:
+    name: 解析版本列表
+    runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.prepare.outputs.versions }}
+      workers: ${{ steps.prepare.outputs.workers }}
     steps:
-      - uses: actions/checkout@v5
-
-      - name: 解析版本列表
+      - name: 解析版本列表并计算 worker 数
         id: prepare
         env:
           INPUT_VERSIONS: ${{ inputs.dart_versions }}
@@ -40,14 +34,35 @@ jobs:
           # 支持 "[3.3.4, 3.4.2]" 或 "3.3.4, 3.4.2" 格式
           VERSIONS=$(echo "$INPUT_VERSIONS" | python3 -c "import json,sys; raw=sys.stdin.read().strip().strip('[]'); vs=[v.strip() for v in raw.split(',') if v.strip()]; print(json.dumps(vs))")
           echo "versions=$VERSIONS" >> $GITHUB_OUTPUT
+          # 固定最多 20 个 worker 并行，版本数不足时每版本一个 worker
+          echo "workers=$(python3 -c "import json; vs=json.loads('$VERSIONS'); print(json.dumps(list(range(1, min(20, len(vs)) + 1))))")" >> $GITHUB_OUTPUT
           echo "待构建版本: $VERSIONS"
+
+  build:
+    name: 构建 Worker ${{ matrix.worker }}（Ubuntu ${{ inputs.runner_version }}）
+    needs: prepare
+    if: needs.prepare.outputs.versions != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        worker: ${{ fromJson(needs.prepare.outputs.workers) }}
+    runs-on: ubuntu-${{ inputs.runner_version }}-arm
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 5G
+      CCACHE_COMPILERCHECK: "none"
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_NOHARDLINK: "true"
+      RUNNER_SUFFIX: ${{ (inputs.runner_version == '22.04' && '22') || '24' }}
+    steps:
+      - uses: actions/checkout@v5
 
       - name: 恢复 CCache 缓存
         uses: actions/cache@v5
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ inputs.runner_version }}
-          restore-keys: ccache-
+          key: ccache-${{ inputs.runner_version }}-worker-${{ matrix.worker }}
+          restore-keys: ccache-${{ inputs.runner_version }}-
 
       - name: 安装依赖
         run: |
@@ -57,7 +72,7 @@ jobs:
             cmake ninja-build git curl unzip \
             python3 python3-pip python3-pyelftools python3-requests \
             libcapstone-dev libicu-dev ccache
-          if [ "$RUNNER_VERSION" = "22.04" ]; then
+          if [ "${{ inputs.runner_version }}" = "22.04" ]; then
             echo "==> Ubuntu 22.04: 安装 gcc-13 / g++-13（提供 libstdc++-13，支持 std::format）"
             sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
             sudo apt-get update -qq
@@ -76,16 +91,19 @@ jobs:
           ccache -M ${{ env.CCACHE_MAXSIZE }}
           ccache -s
 
-      - name: 按版本顺序构建并发布（缺失的才构建）
+      - name: 计算本 worker 的版本分片
+        id: shard
+        run: |
+          SUBSET=$(python3 -c "import json; versions=json.loads('${{ needs.prepare.outputs.versions }}'); workers=json.loads('${{ needs.prepare.outputs.workers }}'); idx=${{ matrix.worker }}-1; n=len(workers); print(' '.join(versions[idx::n]))")
+          echo "本 worker 负责版本: $SUBSET"
+          echo "subset=$SUBSET" >> $GITHUB_OUTPUT
+
+      - name: 构建并发布分片版本（缺失的才构建）
         env:
-          VERSIONS: ${{ steps.prepare.outputs.versions }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ "$RUNNER_VERSION" = "22.04" ]; then SUFFIX="22"; else SUFFIX="24"; fi
-          echo "编译环境后缀: $SUFFIX"
-          python3 -c "import json,os; print('\n'.join(json.loads(os.environ['VERSIONS'])))" > /tmp/versions.txt
-          while IFS= read -r ver; do
-            asset="blutter_dartvm${ver}_android_arm64_${SUFFIX}"
+          for ver in ${{ steps.shard.outputs.subset }}; do
+            asset="blutter_dartvm${ver}_android_arm64_${RUNNER_SUFFIX}"
             # 该版本 Release 已有本环境产物则跳过（增量补齐）
             if gh release view "$ver" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx "$asset"; then
               echo "===== 跳过 $ver：$asset 已存在 ====="
@@ -115,5 +133,4 @@ jobs:
             else
               echo "===== 构建失败，跳过: $ver ====="
             fi
-          done < /tmp/versions.txt
-          echo "===== 全部版本处理完毕 ====="
+          done
