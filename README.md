@@ -79,28 +79,59 @@
 - 支持压缩/非压缩指针模式
 - 自动生成对应的 Frida 脚本模板
 
-## 运行说明
+## 定制版 blutter（Android 手机端）
 
-运行 blutter 需要 `scripts/frida.template.js`（生成 Frida 脚本的模板），Release 已附带该文件。二进制运行时按以下顺序自动定位模板：
+仓库根目录的 `定制版blutter.zip` 是精简后的手机端运行包，包含：
+
+| 文件 | 说明 |
+|------|------|
+| `blutter.py` | 入口脚本（自动检测 Dart 版本，检查 bin 目录） |
+| `scripts/frida.template.js` | 生成 Frida 脚本的模板 |
+| `README.md` | 使用说明 |
+
+### 安装
+
+1. 下载 `定制版blutter.zip`，解压到手机 Droidspaces 容器的用户目录：
+
+   ```bash
+   unzip 定制版blutter.zip -d ~/blutter
+   ```
+
+2. 安装运行依赖（Droidspaces Ubuntu 容器内）：
+
+   ```bash
+   pip install pyelftools requests
+   ```
+
+3. 运行 blutter 需要各 Dart 版本的二进制，从本仓库 Releases 下载后放入 `$HOME/blutter/bin/`。
+
+### 使用流程
+
+1. 运行解析（支持 APK 或已解压的 lib 目录）：
+
+   ```bash
+   python3 blutter.py xxx.apk out
+   ```
+
+   ```bash
+   python3 blutter.py path/to/lib/arm64-v8a out
+   ```
+
+2. 脚本自动检测 Dart 版本，并在 `$HOME/blutter/bin/` 查找对应版本的二进制：
+   - **存在**：直接解析，输出到 `out` 目录
+   - **不存在**：打印所需的 Dart 版本号，提示从 Releases 下载
+
+3. 从 Releases 下载对应版本二进制放入 `$HOME/blutter/bin/`，重新运行命令即可解析。
+
+二进制命名格式：`blutter_dartvm<版本>_android_arm64`，例如 Dart 3.4.2 对应 `blutter_dartvm3.4.2_android_arm64`。
+
+### Frida 模板定位
+
+运行 blutter 需要 `scripts/frida.template.js`（二进制在 Release 中已附带）。二进制按以下顺序自动定位模板：
 
 1. 可执行文件同目录下的 `scripts/frida.template.js`
 2. 可执行文件上一级目录的 `scripts/frida.template.js`
 3. 当前工作目录下的 `scripts/frida.template.js`
-
-推荐目录结构（与原版 blutter 一致，`blutter_dartvm*` 为 Release 下载的二进制）：
-
-```
-blutter/
-├── blutter_dartvm<ver>_android_arm64
-└── scripts/
-    └── frida.template.js
-```
-
-在 `blutter/` 目录内运行：
-
-```bash
-python3 blutter.py libapp.so out
-```
 
 ## 构建环境
 
