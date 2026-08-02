@@ -24,6 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       versions: ${{ steps.prepare.outputs.versions }}
+      subsets: ${{ steps.prepare.outputs.subsets }}
       workers: ${{ steps.prepare.outputs.workers }}
     steps:
       - name: 安装依赖（主 worker 预检）
@@ -66,11 +67,15 @@ jobs:
               FILTERED+=("$ver")
             fi
           done
-          VERSIONS=$(python3 -c "import json,sys; print(json.dumps(sys.argv[1:]))" "${FILTERED[@]}")
+          # 主 worker：按版本号数字大小升序排序，再分割成最多 20 份分给各子 worker
+          PLAN=$(python3 -c "import json,sys; vs=sys.argv[1:]; vs.sort(key=lambda v: tuple(int(x) for x in v.split('.'))); n=min(20,len(vs)); print(json.dumps({'versions': vs, 'subsets': [vs[i::n] for i in range(n)], 'workers': list(range(1,n+1))}))" "${FILTERED[@]}")
+          VERSIONS=$(echo "$PLAN" | python3 -c "import json,sys; print(json.dumps(json.load(sys.stdin)['versions']))")
+          SUBSETS=$(echo "$PLAN" | python3 -c "import json,sys; print(json.dumps(json.load(sys.stdin)['subsets']))")
+          WORKERS=$(echo "$PLAN" | python3 -c "import json,sys; print(json.dumps(json.load(sys.stdin)['workers']))")
           echo "versions=$VERSIONS" >> $GITHUB_OUTPUT
-          # 固定最多 20 个 worker 并行，版本数不足时每版本一个 worker
-          echo "workers=$(python3 -c "import json; vs=json.loads('$VERSIONS'); print(json.dumps(list(range(1, min(20, len(vs)) + 1))))")" >> $GITHUB_OUTPUT
-          echo "过滤后待构建版本: $VERSIONS"
+          echo "subsets=$SUBSETS" >> $GITHUB_OUTPUT
+          echo "workers=$WORKERS" >> $GITHUB_OUTPUT
+          echo "过滤并排序后待构建版本: $VERSIONS"
 
   build:
     name: 构建 Worker ${{ matrix.worker }}（Ubuntu ${{ inputs.runner_version }}）
@@ -125,13 +130,12 @@ jobs:
           ccache -M ${{ env.CCACHE_MAXSIZE }}
           ccache -s
 
-      - name: 计算本 worker 的版本分片
+      - name: 获取本 worker 的版本分片
         id: shard
         env:
-          VERSIONS_JSON: ${{ needs.prepare.outputs.versions }}
-          WORKERS_JSON: ${{ needs.prepare.outputs.workers }}
+          SUBSETS_JSON: ${{ needs.prepare.outputs.subsets }}
         run: |
-          SUBSET=$(python3 -c "import json; versions=json.loads('$VERSIONS_JSON'); workers=json.loads('$WORKERS_JSON'); idx=${{ matrix.worker }}-1; n=len(workers); print(' '.join(versions[idx::n]))")
+          SUBSET=$(python3 -c "import json; print(' '.join(json.loads('$SUBSETS_JSON')[${{ matrix.worker }}-1]))")
           echo "本 worker 负责版本: $SUBSET"
           echo "subset=$SUBSET" >> $GITHUB_OUTPUT
 
