@@ -127,8 +127,11 @@ jobs:
 
       - name: 计算本 worker 的版本分片
         id: shard
+        env:
+          VERSIONS_JSON: ${{ needs.prepare.outputs.versions }}
+          WORKERS_JSON: ${{ needs.prepare.outputs.workers }}
         run: |
-          SUBSET=$(python3 -c "import json; versions=json.loads('${{ needs.prepare.outputs.versions }}'); workers=json.loads('${{ needs.prepare.outputs.workers }}'); idx=${{ matrix.worker }}-1; n=len(workers); print(' '.join(versions[idx::n]))")
+          SUBSET=$(python3 -c "import json; versions=json.loads('$VERSIONS_JSON'); workers=json.loads('$WORKERS_JSON'); idx=${{ matrix.worker }}-1; n=len(workers); print(' '.join(versions[idx::n]))")
           echo "本 worker 负责版本: $SUBSET"
           echo "subset=$SUBSET" >> $GITHUB_OUTPUT
 
