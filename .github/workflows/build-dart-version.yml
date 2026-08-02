@@ -26,17 +26,33 @@ jobs:
       versions: ${{ steps.prepare.outputs.versions }}
       workers: ${{ steps.prepare.outputs.workers }}
     steps:
-      - name: 解析版本列表并计算 worker 数
+      - name: 解析版本列表并按已有产物过滤
         id: prepare
         env:
           INPUT_VERSIONS: ${{ inputs.dart_versions }}
+          RUNNER_VERSION: ${{ inputs.runner_version }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # 支持 "[3.3.4, 3.4.2]" 或 "3.3.4, 3.4.2" 格式
           VERSIONS=$(echo "$INPUT_VERSIONS" | python3 -c "import json,sys; raw=sys.stdin.read().strip().strip('[]'); vs=[v.strip() for v in raw.split(',') if v.strip()]; print(json.dumps(vs))")
+          if [ "$RUNNER_VERSION" = "22.04" ]; then SUFFIX="22"; else SUFFIX="24"; fi
+          echo "编译环境: $RUNNER_VERSION (后缀 _$SUFFIX)"
+          mapfile -t ALL < <(echo "$VERSIONS" | python3 -c "import json,sys; print('\n'.join(json.loads(sys.stdin.read())))")
+          # 主 worker 先检查每个版本：本环境产物已存在则从编译列表排除
+          FILTERED=()
+          for ver in "${ALL[@]}"; do
+            asset="blutter_dartvm${ver}_android_arm64_${SUFFIX}"
+            if gh release view "$ver" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx "$asset"; then
+              echo "排除（已有 $asset）: $ver"
+            else
+              FILTERED+=("$ver")
+            fi
+          done
+          VERSIONS=$(python3 -c "import json,sys; print(json.dumps(sys.argv[1:]))" "${FILTERED[@]}")
           echo "versions=$VERSIONS" >> $GITHUB_OUTPUT
           # 固定最多 20 个 worker 并行，版本数不足时每版本一个 worker
           echo "workers=$(python3 -c "import json; vs=json.loads('$VERSIONS'); print(json.dumps(list(range(1, min(20, len(vs)) + 1))))")" >> $GITHUB_OUTPUT
-          echo "待构建版本: $VERSIONS"
+          echo "过滤后待构建版本: $VERSIONS"
 
   build:
     name: 构建 Worker ${{ matrix.worker }}（Ubuntu ${{ inputs.runner_version }}）
@@ -104,12 +120,7 @@ jobs:
         run: |
           for ver in ${{ steps.shard.outputs.subset }}; do
             asset="blutter_dartvm${ver}_android_arm64_${RUNNER_SUFFIX}"
-            # 该版本 Release 已有本环境产物则跳过（增量补齐）
-            if gh release view "$ver" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx "$asset"; then
-              echo "===== 跳过 $ver：$asset 已存在 ====="
-              continue
-            fi
-            echo "===== 开始构建 Dart $ver ====="
+            echo "===== 开始构建 Dart $ver ($asset) ====="
             if python3 scripts/build.py clone-dart "$ver" \
                && python3 scripts/build.py generate-sources "$ver" \
                && python3 scripts/build.py build-dartvm "$ver" --arch aarch64 \
