@@ -6,22 +6,22 @@ on:
       dart_versions:
         description: 'Dart 版本列表，逗号分隔（如 3.3.4, 3.4.2, 3.5.2 或 [3.3.4, 3.4.2]）；按版本号顺序逐个构建发布'
         required: true
-      runner_version:
-        description: '编译环境（Ubuntu 版本，22.04 与手机 Droidspaces 环境一致）'
-        type: choice
-        required: true
-        default: '22.04'
-        options:
-          - '22.04'
-          - '24.04'
 
 permissions:
   contents: write
 
 jobs:
   build:
-    name: 顺序构建并发布
-    runs-on: ubuntu-${{ inputs.runner_version }}-arm
+    name: 构建并发布（Ubuntu ${{ matrix.runner_version }}）
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner_version: '22.04'
+            suffix: '22'
+          - runner_version: '24.04'
+            suffix: '24'
+    runs-on: ubuntu-${{ matrix.runner_version }}-arm
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 5G
@@ -56,7 +56,7 @@ jobs:
             cmake ninja-build git curl unzip \
             python3 python3-pip python3-pyelftools python3-requests \
             libcapstone-dev libicu-dev ccache
-          if [ "${{ inputs.runner_version }}" = "22.04" ]; then
+          if [ "${{ matrix.runner_version }}" = "22.04" ]; then
             echo "==> Ubuntu 22.04: 安装 gcc-13 / g++-13（提供 libstdc++-13，支持 std::format）"
             sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
             sudo apt-get update -qq
@@ -75,10 +75,11 @@ jobs:
           ccache -M ${{ env.CCACHE_MAXSIZE }}
           ccache -s
 
-      - name: 按版本号顺序构建并发布
+      - name: 按版本号顺序构建并发布（产物带 _${{ matrix.suffix }} 后缀）
         env:
           VERSIONS: ${{ steps.prepare.outputs.versions }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUNNER_SUFFIX: ${{ matrix.suffix }}
         run: |
           python3 -c "import json,os; print('\n'.join(json.loads(os.environ['VERSIONS'])))" > /tmp/versions.txt
           while IFS= read -r ver; do
@@ -87,8 +88,23 @@ jobs:
                && python3 scripts/build.py generate-sources "$ver" \
                && python3 scripts/build.py build-dartvm "$ver" --arch aarch64 \
                && python3 scripts/build.py build-blutter "$ver" --arch aarch64; then
-              echo "===== 发布 $ver ====="
-              gh release create "$ver" "bin/blutter_dartvm${ver}_android_arm64" --title "blutter $ver" 2>&1 || echo "Release 创建失败（可能已存在）: $ver"
+              # 重命名产物，带上环境后缀（_22 / _24）
+              bin_file="bin/blutter_dartvm${ver}_android_arm64_${RUNNER_SUFFIX}"
+              mv "bin/blutter_dartvm${ver}_android_arm64" "$bin_file"
+              echo "===== 发布 $ver ($bin_file) ====="
+              # 22/24 两个 job 并行，同一 tag：先创建者成功，后到者追加上传
+              if gh release create "$ver" "$bin_file" --title "blutter $ver" 2>/dev/null; then
+                echo "Release 已创建并上传: $bin_file"
+              else
+                for i in 1 2 3 4 5; do
+                  if gh release upload "$ver" "$bin_file" --clobber 2>/dev/null; then
+                    echo "已追加上传到已存在的 Release: $bin_file"
+                    break
+                  fi
+                  echo "Release 尚未就绪，等待后重试 ($i/5)"
+                  sleep 8
+                done
+              fi
               echo "===== $ver 完成，开始下一个版本 ====="
             else
               echo "===== 构建失败，跳过: $ver ====="
