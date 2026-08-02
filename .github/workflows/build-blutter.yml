@@ -105,7 +105,7 @@ jobs:
           mv blutter_dartvm${{ env.DART_VERSION }}_android_arm64 bin/
 
           # 打包 bin、packages 和 frida 模板（模板保持 scripts/ 相对结构）
-          zip -r blutter_dartvm${{ env.DART_VERSION }}_android_arm64.zip bin packages scripts/frida.template.js
+          zip -r blutter_dartvm${{ env.DART_VERSION }}_android_arm64.zip bin packages
 
           echo "打包完成:"
           unzip -l blutter_dartvm${{ env.DART_VERSION }}_android_arm64.zip
@@ -121,7 +121,7 @@ jobs:
         with:
           tag_name: ${{ env.DART_VERSION }}
           name: blutter ${{ env.DART_VERSION }}
-          files: ${{ inputs.upload_packages && 'blutter_dartvm*.zip' || format('blutter_dartvm*{0}scripts/frida.template.js', '\n') }}
+          files: ${{ inputs.upload_packages && 'blutter_dartvm*.zip' || 'blutter_dartvm*' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -130,5 +130,5 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: Blutter 构建产物 ${{ env.DART_VERSION }}（Android ARM64）
-          path: ${{ inputs.upload_packages && 'blutter_dartvm*.zip' || format('blutter_dartvm*{0}scripts/frida.template.js', '\n') }}
+          path: ${{ inputs.upload_packages && 'blutter_dartvm*.zip' || 'blutter_dartvm*' }}
           if-no-files-found: error

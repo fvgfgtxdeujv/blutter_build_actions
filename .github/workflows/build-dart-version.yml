@@ -88,7 +88,7 @@ jobs:
                && python3 scripts/build.py build-dartvm "$ver" --arch aarch64 \
                && python3 scripts/build.py build-blutter "$ver" --arch aarch64; then
               echo "===== 发布 $ver ====="
-              gh release create "$ver" "bin/blutter_dartvm${ver}_android_arm64" "scripts/frida.template.js" --title "blutter $ver" 2>&1 || echo "Release 创建失败（可能已存在）: $ver"
+              gh release create "$ver" "bin/blutter_dartvm${ver}_android_arm64" --title "blutter $ver" 2>&1 || echo "Release 创建失败（可能已存在）: $ver"
               echo "===== $ver 完成，开始下一个版本 ====="
             else
               echo "===== 构建失败，跳过: $ver ====="

@@ -127,7 +127,7 @@
 
 ### Frida 模板定位
 
-运行 blutter 需要 `scripts/frida.template.js`（二进制在 Release 中已附带）。二进制按以下顺序自动定位模板：
+运行 blutter 需要 `scripts/frida.template.js`（定制版运行包已包含，即 `~/blutter/scripts/frida.template.js`）。二进制按以下顺序自动定位模板：
 
 1. 可执行文件同目录下的 `scripts/frida.template.js`
 2. 可执行文件上一级目录的 `scripts/frida.template.js`
