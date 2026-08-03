@@ -136,33 +136,77 @@ void DartDumper::Dump4Ida(std::filesystem::path outDir)
 	of << R"CBLOCK(
 import ida_funcs
 import idaapi
-import ida_typeinf
-import ida_ua
+import os
+
+# ---- IDA version auto-detection ----
+_OLD_IDA = False
+try:
+    import idc  # removed in IDA 9.x
+    _OLD_IDA = True
+except ImportError:
+    import ida_typeinf
+    import ida_ua
+    insn = ida_ua.insn_t()
+
+def _get_struc_id(name):
+    if _OLD_IDA:
+        return idc.get_struc_id(name)
+    return ida_typeinf.get_struc_id(name)
+
+def _import_type(til, name):
+    if _OLD_IDA:
+        return idc.import_type(til, name)
+    return ida_typeinf.import_type(til, name)
+
+def _parse_types(file, flags):
+    if _OLD_IDA:
+        return idaapi.idc_parse_types(file, flags)
+    return ida_typeinf.parse_decls(file, flags)
+
+BADADDR = idc.BADADDR if _OLD_IDA else idaapi.BADADDR
 
 def create_Dart_structs():
-    sid1 = ida_typeinf.get_struc_id("DartThread")
-    if sid1 != idaapi.BADADDR:
-        return sid1, ida_typeinf.get_struc_id("DartObjectPool")
+    sid1 = _get_struc_id("DartThread")
+    if sid1 != BADADDR:
+        return sid1, _get_struc_id("DartObjectPool")
     hdr_file = os.path.join(os.path.dirname(__file__), 'ida_dart_struct.h')
-    ida_typeinf.parse_decls(hdr_file, ida_typeinf.HTI_PP_SILENT)
-    sid1 = ida_typeinf.import_type(-1, "DartThread")
-    sid2 = ida_typeinf.import_type(-1, "DartObjectPool")
+    _parse_types(hdr_file, idc.PT_FILE if _OLD_IDA else ida_typeinf.HTI_PP_SILENT)
+    sid1 = _import_type(-1, "DartThread")
+    sid2 = _import_type(-1, "DartObjectPool")
+    if _OLD_IDA:
+        import ida_struct
+        return sid1, sid2, ida_struct.get_struc(sid2)
     til = ida_typeinf.get_idati()
-    tif1 = til.get_named_type(ida_typeinf.BTF_STRUCT, "DartThread")
-    tif2 = til.get_named_type(ida_typeinf.BTF_STRUCT, "DartObjectPool")
+    return sid1, sid2, til.get_named_type(ida_typeinf.BTF_STRUCT, "DartObjectPool")
+
+def set_stroff(addr, op_idx, sid):
+    if _OLD_IDA:
+        idc.op_stroff(insn, op_idx, sid, 0)
+    else:
+        ida_ua.decode_insn(insn, addr)
+        ida_ua.set_forced_operand(insn, op_idx, sid)
+
+def set_member_cmt(struct_or_tif, offset, cmt):
+    if _OLD_IDA:
+        import ida_struct
+        m = ida_struct.get_member(struct_or_tif, offset)
+        if m:
+            ida_struct.set_member_cmt(m, cmt, True)
+    else:
+        udm = struct_or_tif.get_udm_by_offset(offset)
+        if udm is not None:
+            udm.cmt = cmt
+            udm.set_regcmt(True)
 )CBLOCK";
-	of << "\treturn sid1, sid2, tif2\n";
-	of << "sid1, sid2, pp_tif = create_Dart_structs()\n";
+	of << "\treturn create_Dart_structs()\n";
+	of << "sid1, sid2, pp_struct = create_Dart_structs()\n";
 
 	of << "print('Applying Thread and Object Pool struct')\n";
 	applyStruct4Ida(of);
 
 	of << "print('Setting Object Pool comments')\n";
 	for (const auto& [offset, comment] : comments) {
-		of << "\tudm = pp_tif.get_udm_by_offset(" << offset << ")\n";
-		of << "\tif udm is not None:\n";
-		of << "\t\tudm.cmt = '''" << comment << "'''\n";
-		of << "\t\tudm.set_regcmt(True)\n";
+		of << "\tset_member_cmt(pp_struct, " << offset << ", '''" << comment << "''')\n";
 	}
 
 	of << "print('Script finished!')\n";
@@ -255,13 +299,6 @@ std::vector<std::pair<intptr_t, std::string>> DartDumper::DumpStructHeaderFile(s
 void DartDumper::applyStruct4Ida(std::ostream& of)
 {
 	Disassembler disasmer;
-
-	of << "import ida_ua\n";
-	of << "insn = ida_ua.insn_t()\n";
-
-	of << "def set_stroff(addr, op_idx, sid):\n";
-	of << "\tida_ua.decode_insn(insn, addr)\n";
-	of << "\tida_ua.set_forced_operand(insn, op_idx, sid)\n";
 
 	for (auto lib : app.libs) {
 		if (lib->isInternal)
