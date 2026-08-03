@@ -134,26 +134,36 @@ void DartDumper::Dump4Ida(std::filesystem::path outDir)
 	//   use header file then adding comment is much faster
 	auto comments = DumpStructHeaderFile((outDir / "ida_dart_struct.h").string());
 	of << R"CBLOCK(
-import ida_struct
-import os
+import ida_funcs
+import idaapi
+import ida_typeinf
+import ida_ua
+
 def create_Dart_structs():
-	sid1 = idc.get_struc_id("DartThread")
-	if sid1 != idc.BADADDR:
-		return sid1, idc.get_struc_id("DartObjectPool")
-	hdr_file = os.path.join(os.path.dirname(__file__), 'ida_dart_struct.h')
-	idaapi.idc_parse_types(hdr_file, idc.PT_FILE)
-	sid1 = idc.import_type(-1, "DartThread")
-	sid2 = idc.import_type(-1, "DartObjectPool")
-	struc = ida_struct.get_struc(sid2)
+    sid1 = ida_typeinf.get_struc_id("DartThread")
+    if sid1 != idaapi.BADADDR:
+        return sid1, ida_typeinf.get_struc_id("DartObjectPool")
+    hdr_file = os.path.join(os.path.dirname(__file__), 'ida_dart_struct.h')
+    ida_typeinf.parse_decls(hdr_file, ida_typeinf.HTI_PP_SILENT)
+    sid1 = ida_typeinf.import_type(-1, "DartThread")
+    sid2 = ida_typeinf.import_type(-1, "DartObjectPool")
+    til = ida_typeinf.get_idati()
+    tif1 = til.get_named_type(ida_typeinf.BTF_STRUCT, "DartThread")
+    tif2 = til.get_named_type(ida_typeinf.BTF_STRUCT, "DartObjectPool")
 )CBLOCK";
-	for (const auto& [offset, comment] : comments) {
-		of << "\tida_struct.set_member_cmt(ida_struct.get_member(struc, " << offset << "), '''" << comment << "''', True)\n";
-	}
-	of << "\treturn sid1, sid2\n";
-	of << "thrs, pps = create_Dart_structs()\n";
+	of << "\treturn sid1, sid2, tif2\n";
+	of << "sid1, sid2, pp_tif = create_Dart_structs()\n";
 
 	of << "print('Applying Thread and Object Pool struct')\n";
 	applyStruct4Ida(of);
+
+	of << "print('Setting Object Pool comments')\n";
+	for (const auto& [offset, comment] : comments) {
+		of << "\tudm = pp_tif.get_udm_by_offset(" << offset << ")\n";
+		of << "\tif udm is not None:\n";
+		of << "\t\tudm.cmt = '''" << comment << "'''\n";
+		of << "\t\tudm.set_regcmt(True)\n";
+	}
 
 	of << "print('Script finished!')\n";
 }
@@ -249,6 +259,10 @@ void DartDumper::applyStruct4Ida(std::ostream& of)
 	of << "import ida_ua\n";
 	of << "insn = ida_ua.insn_t()\n";
 
+	of << "def set_stroff(addr, op_idx, sid):\n";
+	of << "\tida_ua.decode_insn(insn, addr)\n";
+	of << "\tida_ua.set_forced_operand(insn, op_idx, sid)\n";
+
 	for (auto lib : app.libs) {
 		if (lib->isInternal)
 			continue;
@@ -271,14 +285,12 @@ void DartDumper::applyStruct4Ida(std::ostream& of)
 						else if (insn.ops[j].type == ARM64_OP_MEM)
 							reg = insn.ops[j].mem.base;
 						if (reg == CSREG_DART_THR) {
-							of << "ida_ua.decode_insn(insn, " << insn.address() << ")\n";
-							of << "idc.op_stroff(insn, " << (int)j << ", thrs, 0)\n";
+							of << "set_stroff(" << insn.address() << ", " << (int)j << ", sid1)\n";
 							break;
 						}
 						else if (reg == CSREG_DART_PP) {
 							// TODO: if it is not MEM operand, reg cannot be struct offset
-							of << "ida_ua.decode_insn(insn, " << insn.address() << ")\n";
-							of << "idc.op_stroff(insn, " << (int)j << ", pps, 0)\n";
+							of << "set_stroff(" << insn.address() << ", " << (int)j << ", sid2)\n";
 							break;
 						}
 					}
