@@ -11,6 +11,7 @@ import shutil
 import tempfile
 import zipfile
 import argparse
+import hashlib
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).parent
@@ -274,6 +275,43 @@ def generate_sources(version):
     (clone_dir / "Config.cmake.in").write_text(
         "@PACKAGE_INIT@\n\ninclude(\"${CMAKE_CURRENT_LIST_DIR}/dartvmTarget.cmake\")\n"
     )
+
+    # Patch version.cc with the correct snapshot hash (MD5 of VM source files).
+    # This is required for AOT snapshot compatibility. Without it the VM
+    # rejects snapshots built from the same source because the hash differs.
+    print("[*] Computing snapshot hash...")
+    snapshot_files = [
+        'runtime/vm/app_snapshot.h',
+        'runtime/vm/datastream.h',
+        'runtime/vm/image_snapshot.h',
+        'runtime/vm/object.h',
+        'runtime/vm/raw_object.h',
+        'runtime/vm/snapshot.h',
+        'runtime/vm/symbols.h',
+        'runtime/vm/app_snapshot.cc',
+        'runtime/vm/dart.cc',
+        'runtime/vm/dart_api_impl.cc',
+        'runtime/vm/image_snapshot.cc',
+        'runtime/vm/object.cc',
+        'runtime/vm/raw_object.cc',
+        'runtime/vm/snapshot.cc',
+        'runtime/vm/symbols.cc',
+    ]
+    vmhash = hashlib.md5()
+    for relpath in snapshot_files:
+        fpath = clone_dir / relpath
+        if fpath.exists():
+            with open(fpath, 'rb') as f:
+                vmhash.update(f.read())
+    snapshot_hash = vmhash.hexdigest()
+    print(f"[+] Snapshot hash: {snapshot_hash}")
+
+    version_cc = clone_dir / "runtime" / "vm" / "version.cc"
+    if version_cc.exists():
+        content = version_cc.read_text()
+        content = content.replace("{{SNAPSHOT_HASH}}", snapshot_hash)
+        version_cc.write_text(content)
+        print(f"[+] Patched version.cc with snapshot hash")
 
     print(f"[+] C++ standard: {cpp_std}")
     return cpp_std
