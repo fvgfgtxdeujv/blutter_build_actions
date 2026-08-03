@@ -221,16 +221,27 @@ def clone_dart_sdk(version):
     # Generate version.cc from template
     version_in = clone_dir / "runtime" / "vm" / "version_in.cc"
     version_cc = clone_dir / "runtime" / "vm" / "version.cc"
-    
+
     if version_in.exists():
         template = version_in.read_text()
+        # Use the actual git commit hash for GIT_HASH so the build identifier
+        # matches what the AOT snapshot expects. Falling back to the version
+        # string preserves the old behaviour for non-git checkouts.
+        git_hash = version
+        try:
+            git_hash = subprocess.run(
+                [GIT_CMD, "-C", str(clone_dir), "rev-parse", "--short=12", "HEAD"],
+                capture_output=True, text=True, check=True
+            ).stdout.strip()
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            pass
         content = template.replace("{{VERSION_STR}}", version)
         content = content.replace("{{CHANNEL}}", "stable")
         content = content.replace("{{COMMIT_TIME}}", "build")
-        content = content.replace("{{GIT_HASH}}", version)
+        content = content.replace("{{GIT_HASH}}", git_hash)
         content = content.replace("{{SNAPSHOT_HASH}}", "")
         version_cc.write_text(content)
-        print(f"[+] Generated version.cc from template")
+        print(f"[+] Generated version.cc from template (git_hash={git_hash})")
     else:
         print("[!] Warning: version_in.cc not found")
 
