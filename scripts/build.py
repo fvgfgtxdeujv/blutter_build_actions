@@ -240,7 +240,8 @@ def clone_dart_sdk(version):
         content = content.replace("{{CHANNEL}}", "stable")
         content = content.replace("{{COMMIT_TIME}}", "build")
         content = content.replace("{{GIT_HASH}}", git_hash)
-        content = content.replace("{{SNAPSHOT_HASH}}", "")
+        # Leave {{SNAPSHOT_HASH}} as-is; it will be patched in generate_sources
+        # after computing the correct MD5 hash from VM source files.
         version_cc.write_text(content)
         print(f"[+] Generated version.cc from template (git_hash={git_hash})")
     else:
