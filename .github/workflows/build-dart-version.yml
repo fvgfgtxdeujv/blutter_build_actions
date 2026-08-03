@@ -67,8 +67,8 @@ jobs:
               FILTERED+=("$ver")
             fi
           done
-          # 主 worker：按版本号数字大小升序排序，再分割成最多 20 份分给各子 worker
-          PLAN=$(python3 -c "import json,sys; vs=sys.argv[1:]; vs.sort(key=lambda v: tuple(int(x) for x in v.split('.'))); n=min(20,len(vs)); print(json.dumps({'versions': vs, 'subsets': [vs[i::n] for i in range(n)], 'workers': list(range(1,n+1))}))" "${FILTERED[@]}")
+          # 主 worker：按版本号数字大小升序排序，再按连续块分割分给各子 worker
+          PLAN=$(python3 -c "import json,sys; vs=sys.argv[1:]; vs.sort(key=lambda v: tuple(int(x) for x in v.split('.'))); n=min(20,len(vs)); size=(len(vs)+n-1)//n; ss=[vs[i*size:(i+1)*size] for i in range(n)]; ss=[s for s in ss if s]; print(json.dumps({'versions': vs, 'subsets': ss, 'workers': list(range(1,len(ss)+1))}))" "${FILTERED[@]}")
           VERSIONS=$(echo "$PLAN" | python3 -c "import json,sys; print(json.dumps(json.load(sys.stdin)['versions']))")
           SUBSETS=$(echo "$PLAN" | python3 -c "import json,sys; print(json.dumps(json.load(sys.stdin)['subsets']))")
           WORKERS=$(echo "$PLAN" | python3 -c "import json,sys; print(json.dumps(json.load(sys.stdin)['workers']))")
