@@ -123,6 +123,33 @@ def _install_arm64_deb_to_sysroot(pkg, base_url, lib_name, include_dirs,
     run(["rm", "-rf", extract_dir, *[f"/tmp/{d}" for d in deb_files]])
 
 
+def patch_icu_compat(version):
+    """Patch Dart SDK source for ICU version compatibility.
+    Older ICU versions don't have USET_SIMPLE_CASE_INSENSITIVE, use USET_CASE_INSENSITIVE instead."""
+    clone_dir = SDK_DIR / f"v{version}"
+    replacements = {
+        "USET_SIMPLE_CASE_INSENSITIVE": "USET_CASE_INSENSITIVE",
+    }
+    patched_files = []
+    for filepath in clone_dir.rglob("*.cc"):
+        try:
+            content = filepath.read_text()
+            original = content
+            for old, new in replacements.items():
+                content = content.replace(old, new)
+            if content != original:
+                filepath.write_text(content)
+                patched_files.append(str(filepath.relative_to(clone_dir)))
+        except (UnicodeDecodeError, OSError):
+            continue
+    if patched_files:
+        print(f"[+] Patched ICU compat in {len(patched_files)} files:")
+        for f in patched_files:
+            print(f"    {f}")
+    else:
+        print("[=] No ICU patches needed")
+
+
 def generate_toolchain_file():
     """Generate CMake toolchain file for aarch64 cross-compilation"""
     print("[*] Generating toolchain file...")
@@ -206,6 +233,9 @@ def clone_dart_sdk(version):
         print(f"[+] Generated version.cc from template")
     else:
         print("[!] Warning: version_in.cc not found")
+
+    # Patch ICU compatibility for older ICU versions
+    patch_icu_compat(version)
 
     print(f"[+] Dart SDK cloned to {clone_dir}")
 
