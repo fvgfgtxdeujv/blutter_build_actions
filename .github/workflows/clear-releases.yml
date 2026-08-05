@@ -1,14 +1,24 @@
-name: 清空 Releases
+name: 清空 Releases（GitHub + Gitee）
 
 on:
   workflow_dispatch:
+    inputs:
+      clear_gitee:
+        description: '是否同时清空 Gitee Releases（默认仅清空 GitHub）'
+        type: boolean
+        required: true
+        default: false
+      target_repo:
+        description: 'Gitee 目标仓库 (格式: owner/repo) - 仅在清空 Gitee 时需要'
+        required: false
+        type: string
 
 permissions:
   contents: write
 
 jobs:
-  clear:
-    name: 删除全部 Release 及 tag
+  clear-github:
+    name: 删除 GitHub 全部 Release 及 tag
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -24,3 +34,51 @@ jobs:
             gh release delete "$tag" --yes --cleanup-tag || echo "删除失败: $tag"
           done < /tmp/tags.txt
           echo "剩余 Release 数: $(gh release list --limit 1000 --json tagName -q '.[] | length')"
+
+  clear-gitee:
+    name: 删除 Gitee 全部 Release 及 tag
+    if: ${{ inputs.clear_gitee == true }}
+    runs-on: ubuntu-24.04
+    env:
+      GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+      TARGET_REPO: ${{ inputs.target_repo }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: 安装依赖工具
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq curl
+
+      - name: 校验参数
+        run: |
+          if [ -z "$TARGET_REPO" ]; then
+            echo "错误：清空 Gitee 时必须提供目标仓库地址（格式 owner/repo）"
+            exit 1
+          fi
+
+      - name: 删除所有 Gitee Release 和对应 tag
+        run: |
+          page=1
+          TOTAL=0
+          while true; do
+            releases=$(curl -s -H "Authorization: token $GITEE_TOKEN" \
+              "https://gitee.com/api/v5/repos/$TARGET_REPO/releases?per_page=100&page=$page")
+            COUNT=$(echo "$releases" | jq 'length')
+            if [ "$COUNT" -eq 0 ]; then
+              break
+            fi
+            echo "第 $page 页找到 $COUNT 个 Release"
+            echo "$releases" | jq -c '.[]' | while read -r release; do
+              id=$(echo "$release" | jq -r '.id')
+              tag=$(echo "$release" | jq -r '.tag_name')
+              echo "删除 Release: $tag (ID: $id)"
+              curl -sf -X DELETE -H "Authorization: token $GITEE_TOKEN" \
+                "https://gitee.com/api/v5/repos/$TARGET_REPO/releases/$id" > /dev/null || echo "删除 Release 失败: $tag"
+              echo "删除 Tag: $tag"
+              curl -sf -X DELETE -H "Authorization: token $GITEE_TOKEN" \
+                "https://gitee.com/api/v5/repos/$TARGET_REPO/tags/$tag" > /dev/null || echo "删除 Tag 失败: $tag"
+            done
+            page=$((page + 1))
+          done
+          echo "Gitee 清空完成"

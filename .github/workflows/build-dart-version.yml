@@ -196,11 +196,52 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y jq curl
 
-      - name: 同步 Tags 到 Gitee
+      - name: 同步 Tags 到 Gitee（API 方式）
         run: |
-          echo "🏷️ 同步 Tags 到 Gitee"
-          git remote add gitee https://oauth2:$GITEE_TOKEN@gitee.com/$TARGET_REPO.git
-          git push gitee --tags --force || echo "⚠️ Tag 同步失败，继续尝试"
+          echo "🏷️ 通过 Gitee API 同步 Tags 到 $TARGET_REPO"
+
+          # 获取所有本地 tag
+          TAGS=$(git tag)
+          if [ -z "$TAGS" ]; then
+            echo "本地没有 tag，跳过"
+            exit 0
+          fi
+
+          # 分页获取 Gitee 已存在的 tag 列表
+          EXISTING=/tmp/gitee_tags.txt
+          : > "$EXISTING"
+          page=1
+          while true; do
+            list=$(curl -sf -H "Authorization: token $GITEE_TOKEN" \
+              "https://gitee.com/api/v5/repos/$TARGET_REPO/tags?per_page=100&page=$page") || break
+            count=$(echo "$list" | jq 'length')
+            [ "$count" -eq 0 ] && break
+            echo "$list" | jq -r '.[].name' >> "$EXISTING"
+            [ "$count" -lt 100 ] && break
+            page=$((page + 1))
+          done
+          echo "Gitee 已有 tag: $(tr '\n' ' ' < "$EXISTING")"
+
+          for tag in $TAGS; do
+            # 解析 tag 指向的 commit（兼容轻量/附注 tag）
+            sha=$(git rev-list -n 1 "$tag" 2>/dev/null) || sha=$(git rev-parse "$tag^{commit}") || { echo "跳过(无 commit): $tag"; continue; }
+            if grep -qx "$tag" "$EXISTING"; then
+              echo "已存在，跳过: $tag"
+              continue
+            fi
+            echo "创建 tag: $tag -> $sha"
+            resp=$(curl -s -X POST \
+              -H "Authorization: token $GITEE_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"sha\":\"$sha\",\"tag_name\":\"$tag\",\"ref\":\"master\",\"message\":\"sync tag: $tag\",\"tagger_name\":\"CI Sync\",\"tagger_email\":\"ci@github.com\"}" \
+              "https://gitee.com/api/v5/repos/$TARGET_REPO/git/tags")
+            if echo "$resp" | jq -e '.name' > /dev/null 2>&1; then
+              echo "✅ 已创建: $tag"
+            else
+              msg=$(echo "$resp" | jq -r '.message // "未知错误"')
+              echo "❌ 创建失败 $tag: $msg（若提示 sha 不存在，说明该 commit 尚未同步到 Gitee）"
+            fi
+          done
           echo "✅ Tags 同步完成"
 
       - name: 同步 Releases
