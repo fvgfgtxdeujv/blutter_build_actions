@@ -42,3 +42,5 @@ Entries discovered by the Agent during task execution should follow this format:
   - 另有从 Swagger 自动提取的中文接口文档可作参考：https://corper.cn/down.php/25b7311581ab33080c58cfaf124909f4.md（264 个接口，2026-08-05 生成）。
   - Gitee API 认证支持 Authorization: token <access_token> header，也支持 URL query 参数 access_token。
   - 若目标 Gitee 仓库没有源码历史（只有初始 commit），创建 tag 时 refs 只能传该仓库已存在的 ref（如 master），不能传 GitHub 仓库的 commit sha。
+  - Gitee API v5 没有删除 tag 的接口（DELETE /repos/{owner}/{repo}/tags/{tag} 在 nginx 层返回 404，swagger 264 个接口中 tags 仅 GET/POST）。删除 tag 只能通过 git push --delete refs/tags/{tag} 或网页操作。
+  - Gitee API 的写操作（POST/PUT/DELETE/PATCH）在路由匹配之前有全局登录中间件，未登录时任意路径都返回 401 登录失效；因此无法用无 token 请求探测写接口是否存在，需用 GET 公开接口或 swagger spec 确认。

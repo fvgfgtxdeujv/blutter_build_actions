@@ -76,8 +76,14 @@ jobs:
               curl -sf -X DELETE -H "Authorization: token $GITEE_TOKEN" \
                 "https://gitee.com/api/v5/repos/$TARGET_REPO/releases/$id" > /dev/null || echo "删除 Release 失败: $tag"
               echo "删除 Tag: $tag"
-              curl -sf -X DELETE -H "Authorization: token $GITEE_TOKEN" \
-                "https://gitee.com/api/v5/repos/$TARGET_REPO/tags/$tag" > /dev/null || echo "删除 Tag 失败: $tag"
+              owner="${TARGET_REPO%%/*}"
+              push_url="https://$owner:$GITEE_TOKEN@gitee.com/$TARGET_REPO.git"
+              if git ls-remote "$push_url" "refs/tags/$tag" 2>/dev/null | grep -q "refs/tags/$tag"; then
+                git push "$push_url" --delete "refs/tags/$tag" > /dev/null 2>&1 \
+                  && echo "✅ Tag $tag 已删除" || echo "❌ 删除 Tag 失败: $tag"
+              else
+                echo "Tag $tag 不存在，跳过"
+              fi
             done
             page=$((page + 1))
           done
