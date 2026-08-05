@@ -187,29 +187,33 @@ jobs:
       TARGET_REPO: ${{ needs.prepare.outputs.target_repo }}
       SOURCE_REPO: ${{ needs.prepare.outputs.source_repo }}
     steps:
-      - name: 检查 Gitee Token
-        run: |
-          if [ -z "$GITEE_TOKEN" ]; then
-            echo "❌ 错误：GITEE_TOKEN 未设置，请在仓库 Secrets 中添加"
-            exit 1
-          fi
-          echo "✅ GITEE_TOKEN 已设置"
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: 安装依赖工具
         run: |
           sudo apt-get update
           sudo apt-get install -y jq curl
 
+      - name: 同步 Tags 到 Gitee
+        run: |
+          echo "🏷️ 同步 Tags 到 Gitee"
+          git remote add gitee https://oauth2:$GITEE_TOKEN@gitee.com/$TARGET_REPO.git
+          git push gitee --tags --force || echo "⚠️ Tag 同步失败，继续尝试"
+          echo "✅ Tags 同步完成"
+
       - name: 同步 Releases
         run: |
           set -e
-          echo "🔁 开始从 $SOURCE_REPO 同步 Releases 到 $TARGET_REPO"
+          echo "🔁 源仓库: $SOURCE_REPO"
+          echo "🔁 目标仓库: $TARGET_REPO"
+          
           page=1
           per_page=100
           while true; do
             echo "📄 获取第 $page 页 Release 列表"
             releases=$(curl -s "https://api.github.com/repos/$SOURCE_REPO/releases?per_page=$per_page&page=$page")
-            # 如果返回空数组，说明没有更多了
             if [ "$(echo "$releases" | jq length)" -eq 0 ]; then
               break
             fi
@@ -219,28 +223,35 @@ jobs:
               body=$(echo "$release" | jq -r '.body')
               is_draft=$(echo "$release" | jq -r '.draft')
               is_prerelease=$(echo "$release" | jq -r '.prerelease')
-              # 处理空值
               [ "$name" = "null" ] && name=""
               [ "$body" = "null" ] && body=""
 
               echo "▶️ 正在处理 Release: $tag"
 
-              # 在 Gitee 创建 Release（如果已存在会返回错误，跳过）
-              create_response=$(curl -s -X POST \
-                -H "Authorization: token $GITEE_TOKEN" \
-                -H "Content-Type: application/json" \
-                -d "{\"tag_name\":\"$tag\", \"name\":\"$name\", \"body\":\"$body\", \"draft\":$is_draft, \"prerelease\":$is_prerelease}" \
-                "https://gitee.com/api/v5/repos/$TARGET_REPO/releases")
-
-              release_id=$(echo "$create_response" | jq -r '.id')
-              if [ "$release_id" = "null" ] || [ -z "$release_id" ]; then
-                error_msg=$(echo "$create_response" | jq -r '.message // "未知错误"')
-                echo "⚠️ 创建 Release $tag 失败: $error_msg（可能已存在或 Tag 不存在），跳过"
-                continue
+              existing=$(curl -s -H "Authorization: token $GITEE_TOKEN" \
+                "https://gitee.com/api/v5/repos/$TARGET_REPO/releases/tags/$tag" | jq -r '.id // "null"')
+              
+              if [ "$existing" != "null" ]; then
+                echo "⚠️ Release $tag 已存在 (ID: $existing)，跳过创建"
+                release_id="$existing"
+              else
+                create_response=$(curl -s -X POST \
+                  -H "Authorization: token $GITEE_TOKEN" \
+                  -H "Content-Type: application/json" \
+                  -d "{\"tag_name\":\"$tag\", \"name\":\"$name\", \"body\":\"$body\", \"draft\":$is_draft, \"prerelease\":$is_prerelease}" \
+                  "https://gitee.com/api/v5/repos/$TARGET_REPO/releases")
+                
+                echo "📝 创建响应: $create_response"
+                release_id=$(echo "$create_response" | jq -r '.id')
+                
+                if [ "$release_id" = "null" ] || [ -z "$release_id" ]; then
+                  error=$(echo "$create_response" | jq -r '.message // "未知错误"')
+                  echo "❌ 创建 Release $tag 失败: $error"
+                  continue
+                fi
+                echo "✅ Release $tag 创建成功 (ID: $release_id)"
               fi
-              echo "✅ Release $tag 创建成功 (ID: $release_id)"
 
-              # 获取附件并上传
               assets=$(echo "$release" | jq -r '.assets[]? | .browser_download_url + " " + .name')
               echo "$assets" | while read -r asset_url asset_name; do
                 if [ -n "$asset_url" ] && [ -n "$asset_name" ] && [ "$asset_name" != "null" ]; then
@@ -257,7 +268,6 @@ jobs:
                 fi
               done
             done
-            # 检查是否还有下一页（如果返回的数量少于 per_page，则最后一页）
             if [ "$(echo "$releases" | jq length)" -lt "$per_page" ]; then
               break
             fi
