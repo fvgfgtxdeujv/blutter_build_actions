@@ -223,23 +223,23 @@ jobs:
           echo "Gitee 已有 tag: $(tr '\n' ' ' < "$EXISTING")"
 
           for tag in $TAGS; do
-            # 解析 tag 指向的 commit（兼容轻量/附注 tag）
-            sha=$(git rev-list -n 1 "$tag" 2>/dev/null) || sha=$(git rev-parse "$tag^{commit}") || { echo "跳过(无 commit): $tag"; continue; }
             if grep -qx "$tag" "$EXISTING"; then
               echo "已存在，跳过: $tag"
               continue
             fi
-            echo "创建 tag: $tag -> $sha"
+            # 获取本地 tag 的描述（注释）
+            tag_msg=$(git tag -l --format='%(contents:subject)' "$tag")
+            echo "创建 tag: $tag（基于 Gitee master）"
             resp=$(curl -s -X POST \
               -H "Authorization: token $GITEE_TOKEN" \
               -H "Content-Type: application/json" \
-              -d "{\"sha\":\"$sha\",\"tag_name\":\"$tag\",\"ref\":\"master\",\"message\":\"sync tag: $tag\",\"tagger_name\":\"CI Sync\",\"tagger_email\":\"ci@github.com\"}" \
-              "https://gitee.com/api/v5/repos/$TARGET_REPO/git/tags")
+              -d "{\"refs\":\"master\",\"tag_name\":\"$tag\",\"tag_message\":\"$tag_msg\"}" \
+              "https://gitee.com/api/v5/repos/$TARGET_REPO/tags")
             if echo "$resp" | jq -e '.name' > /dev/null 2>&1; then
               echo "✅ 已创建: $tag"
             else
               msg=$(echo "$resp" | jq -r '.message // "未知错误"')
-              echo "❌ 创建失败 $tag: $msg（若提示 sha 不存在，说明该 commit 尚未同步到 Gitee）"
+              echo "❌ 创建失败 $tag: $msg"
             fi
           done
           echo "✅ Tags 同步完成"
@@ -262,10 +262,10 @@ jobs:
               tag=$(echo "$release" | jq -r '.tag_name')
               name=$(echo "$release" | jq -r '.name')
               body=$(echo "$release" | jq -r '.body')
-              is_draft=$(echo "$release" | jq -r '.draft')
               is_prerelease=$(echo "$release" | jq -r '.prerelease')
               [ "$name" = "null" ] && name=""
               [ "$body" = "null" ] && body=""
+              [ -z "$body" ] && body="blutter $tag"
 
               echo "▶️ 正在处理 Release: $tag"
 
@@ -279,7 +279,7 @@ jobs:
                 create_response=$(curl -s -X POST \
                   -H "Authorization: token $GITEE_TOKEN" \
                   -H "Content-Type: application/json" \
-                  -d "{\"tag_name\":\"$tag\", \"name\":\"$name\", \"body\":\"$body\", \"draft\":$is_draft, \"prerelease\":$is_prerelease}" \
+                  -d "{\"tag_name\":\"$tag\", \"name\":\"$name\", \"body\":\"$body\", \"prerelease\":$is_prerelease, \"target_commitish\":\"master\"}" \
                   "https://gitee.com/api/v5/repos/$TARGET_REPO/releases")
                 
                 echo "📝 创建响应: $create_response"

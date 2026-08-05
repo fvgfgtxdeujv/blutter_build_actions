@@ -1,0 +1,44 @@
+# User Instruction Memory
+
+This file records user instructions, preferences, and teachings for reference in future interactions.
+
+## Format
+
+### User Instruction Entry
+User instruction entries should follow this format:
+
+[User Instruction Summary]
+- Date: [YYYY-MM-DD]
+- Context: [Mentioned scenario or time]
+- Instructions:
+  - [Content of user teaching or instruction, described line by line]
+
+### Project Knowledge Entry
+Entries discovered by the Agent during task execution should follow this format:
+
+[Project Knowledge Summary]
+- Date: [YYYY-MM-DD]
+- Context: Discovered by Agent while performing [specific task description]
+- Category: [Operations & Deployment|Build Methods|Testing Methods|Troubleshooting & Debugging|Workflow & Collaboration|Environment Configuration]
+- Instructions:
+  - [Specific knowledge points, described line by line]
+
+## Deduplication Strategy
+- Before adding a new entry, check for similar or identical instructions.
+- If a duplicate is found, skip the new entry or merge it with the existing one.
+- When merging, update the context or date information.
+- This helps avoid redundant entries and keeps the memory file tidy.
+
+## Entries
+
+[Project Knowledge Summary]
+- Date: 2026-08-05
+- Context: Discovered by Agent while fixing Gitee API 405 error in build-dart-version.yml tag sync
+- Category: Troubleshooting & Debugging
+- Instructions:
+  - Gitee API v5 没有 /repos/{owner}/{repo}/git/tags 端点，对该路径 POST 会返回 405 Method Not Allowed。
+  - 创建 tag 的正确接口是 POST /repos/{owner}/{repo}/tags，参数为 refs（起点，传分支名或已存在的 commit sha，如 master）、tag_name、tag_message，成功返回 201 及 Tag 对象。
+  - Gitee API v5 完整 swagger spec 可无认证从 https://gitee.com/api/v5/swagger_doc.json 获取（版本 5.x），用于查证任何接口的路径、HTTP 方法和参数。
+  - 另有从 Swagger 自动提取的中文接口文档可作参考：https://corper.cn/down.php/25b7311581ab33080c58cfaf124909f4.md（264 个接口，2026-08-05 生成）。
+  - Gitee API 认证支持 Authorization: token <access_token> header，也支持 URL query 参数 access_token。
+  - 若目标 Gitee 仓库没有源码历史（只有初始 commit），创建 tag 时 refs 只能传该仓库已存在的 ref（如 master），不能传 GitHub 仓库的 commit sha。
