@@ -1,4 +1,4 @@
-name: 批量构建 Blutter 并可选同步到 Gitee
+name: 批量构建 Blutter 并同步到 Gitee
 
 on:
   workflow_dispatch:
@@ -15,15 +15,6 @@ on:
         options:
           - '22.04'
           - '24.04'
-      sync_to_gitee:
-        description: '是否同步 Releases 到 Gitee'
-        type: boolean
-        required: true
-        default: false
-      target_repo:
-        description: 'Gitee 目标仓库 (格式: owner/repo) - 仅在同步到 Gitee 时需要'
-        required: false
-        type: string
 
 permissions:
   contents: write
@@ -36,9 +27,6 @@ jobs:
       versions: ${{ steps.prepare.outputs.versions }}
       subsets: ${{ steps.prepare.outputs.subsets }}
       workers: ${{ steps.prepare.outputs.workers }}
-      sync_to_gitee: ${{ steps.prepare.outputs.sync_to_gitee }}
-      target_repo: ${{ steps.prepare.outputs.target_repo }}
-      source_repo: ${{ steps.prepare.outputs.source_repo }}
     steps:
       - name: 解析版本列表并按已有产物过滤
         id: prepare
@@ -46,15 +34,7 @@ jobs:
           INPUT_VERSIONS: ${{ inputs.dart_versions }}
           RUNNER_VERSION: ${{ inputs.runner_version }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SYNC_TO_GITEE: ${{ inputs.sync_to_gitee }}
-          TARGET_REPO: ${{ inputs.target_repo }}
         run: |
-          # 验证 Gitee 同步参数
-          if [ "$SYNC_TO_GITEE" = "true" ] && [ -z "$TARGET_REPO" ]; then
-            echo "❌ 错误：同步到 Gitee 时必须提供目标仓库地址"
-            exit 1
-          fi
-          
           # 支持 "[3.3.4, 3.4.2]" 或 "3.3.4, 3.4.2" 格式
           VERSIONS=$(echo "$INPUT_VERSIONS" | python3 -c "import json,sys; raw=sys.stdin.read().strip().strip('[]'); vs=[v.strip() for v in raw.split(',') if v.strip()]; print(json.dumps(vs))")
           if [ "$RUNNER_VERSION" = "22.04" ]; then SUFFIX="22"; else SUFFIX="24"; fi
@@ -78,9 +58,6 @@ jobs:
           echo "versions=$VERSIONS" >> $GITHUB_OUTPUT
           echo "subsets=$SUBSETS" >> $GITHUB_OUTPUT
           echo "workers=$WORKERS" >> $GITHUB_OUTPUT
-          echo "sync_to_gitee=$SYNC_TO_GITEE" >> $GITHUB_OUTPUT
-          echo "target_repo=$TARGET_REPO" >> $GITHUB_OUTPUT
-          echo "source_repo=${{ github.repository }}" >> $GITHUB_OUTPUT
           echo "过滤并排序后待构建版本: $VERSIONS"
 
   build:
@@ -99,6 +76,8 @@ jobs:
       CCACHE_NOHASHDIR: "true"
       CCACHE_NOHARDLINK: "true"
       RUNNER_SUFFIX: ${{ (inputs.runner_version == '22.04' && '22') || '24' }}
+      GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+      GITEE_TARGET_REPO: qeruiop_admin/blutter_build_actions
     steps:
       - uses: actions/checkout@v5
 
@@ -114,7 +93,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             software-properties-common \
-            cmake ninja-build git curl unzip \
+            cmake ninja-build git curl unzip jq \
             python3 python3-pip python3-pyelftools python3-requests \
             libcapstone-dev libicu-dev ccache
           if [ "${{ inputs.runner_version }}" = "22.04" ]; then
@@ -145,10 +124,72 @@ jobs:
           echo "本 worker 负责版本: $SUBSET"
           echo "subset=$SUBSET" >> $GITHUB_OUTPUT
 
-      - name: 构建并发布分片版本（缺失的才构建）
+      - name: 构建并发布分片版本（构建与 Gitee 上传流水线重叠）
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # 后台同步单个版本到 Gitee（tag + release + 附件），附件直接用本地产物
+          sync_to_gitee() {
+            local ver="$1"
+            local bin_file="$2"
+            local fname
+            fname=$(basename "$bin_file")
+            echo "===== [Gitee] 开始后台同步 $ver ($fname) ====="
+
+            # 1. 创建 tag（幂等）
+            if ! curl -s -m 30 -H "Authorization: token $GITEE_TOKEN" \
+                "https://gitee.com/api/v5/repos/$GITEE_TARGET_REPO/tags?per_page=100&page=1" \
+                | jq -e --arg t "$ver" '.[] | select(.name==$t)' > /dev/null 2>&1; then
+              curl -s -m 30 -X POST -H "Authorization: token $GITEE_TOKEN" -H "Content-Type: application/json" \
+                -d "{\"refs\":\"master\",\"tag_name\":\"$ver\",\"tag_message\":\"blutter $ver\"}" \
+                "https://gitee.com/api/v5/repos/$GITEE_TARGET_REPO/tags" > /dev/null 2>&1 \
+                && echo "✅ [Gitee] tag $ver 已创建" || echo "⚠️ [Gitee] tag $ver 创建失败"
+            else
+              echo "[Gitee] tag $ver 已存在，跳过"
+            fi
+
+            # 2. 检查 / 创建 Release（幂等）
+            local release_id
+            release_id=$(curl -s -m 30 -H "Authorization: token $GITEE_TOKEN" \
+              "https://gitee.com/api/v5/repos/$GITEE_TARGET_REPO/releases/tags/$ver" | jq -r '.id // "null"' 2>/dev/null)
+            if [ "$release_id" = "null" ]; then
+              local create_resp
+              create_resp=$(curl -s -m 60 -X POST -H "Authorization: token $GITEE_TOKEN" -H "Content-Type: application/json" \
+                -d "{\"tag_name\":\"$ver\",\"name\":\"blutter $ver\",\"body\":\"blutter $ver\",\"prerelease\":false,\"target_commitish\":\"master\"}" \
+                "https://gitee.com/api/v5/repos/$GITEE_TARGET_REPO/releases")
+              release_id=$(echo "$create_resp" | jq -r '.id // "null"' 2>/dev/null)
+            else
+              echo "[Gitee] Release $ver 已存在 (ID: $release_id)"
+            fi
+            if [ -z "$release_id" ] || [ "$release_id" = "null" ]; then
+              echo "❌ [Gitee] $ver Release 创建失败"
+              return 1
+            fi
+
+            # 3. 上传附件（本地文件，先查重，带超时和重试）
+            if curl -s -m 30 -H "Authorization: token $GITEE_TOKEN" \
+                "https://gitee.com/api/v5/repos/$GITEE_TARGET_REPO/releases/$release_id/attach_files" \
+                | jq -e --arg n "$fname" '.[] | select(.name==$n)' > /dev/null 2>&1; then
+              echo "✅ [Gitee] 附件 $fname 已存在，跳过上传"
+              return 0
+            fi
+            echo "⬆️ [Gitee] 上传 $fname 到 Release $ver (ID: $release_id)"
+            for i in 1 2 3; do
+              if curl -s -m 600 --connect-timeout 10 -X POST -H "Authorization: token $GITEE_TOKEN" \
+                  -F "file=@$bin_file" \
+                  "https://gitee.com/api/v5/repos/$GITEE_TARGET_REPO/releases/$release_id/attach_files" \
+                  | jq -e '.name' > /dev/null 2>&1; then
+                echo "✅ [Gitee] $ver 附件上传完成"
+                return 0
+              fi
+              echo "⚠️ [Gitee] $ver 附件上传失败，重试 ($i/3)"
+              sleep 5
+            done
+            echo "❌ [Gitee] $ver 附件上传失败"
+            return 1
+          }
+
+          GITEE_PIDS=()
           for ver in ${{ steps.shard.outputs.subset }}; do
             asset="blutter_dartvm${ver}_android_arm64_${RUNNER_SUFFIX}"
             echo "===== 开始构建 Dart $ver ($asset) ====="
@@ -171,147 +212,16 @@ jobs:
                   sleep 8
                 done
               fi
-              echo "===== $ver 完成 ====="
+              echo "===== $ver 构建完成，后台同步到 Gitee，继续下一个 ====="
+              sync_to_gitee "$ver" "$bin_file" &
+              GITEE_PIDS+=($!)
             else
               echo "===== 构建失败，跳过: $ver ====="
             fi
           done
-
-  sync-to-gitee:
-    name: 同步 Releases 到 Gitee
-    needs: [prepare, build]
-    if: needs.prepare.outputs.sync_to_gitee == 'true' && needs.prepare.outputs.versions != '[]'
-    runs-on: ubuntu-latest
-    env:
-      GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-      TARGET_REPO: ${{ needs.prepare.outputs.target_repo }}
-      SOURCE_REPO: ${{ needs.prepare.outputs.source_repo }}
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-
-      - name: 安装依赖工具
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq curl
-
-      - name: 同步 Tags 到 Gitee（API 方式）
-        run: |
-          echo "🏷️ 通过 Gitee API 同步 Tags 到 $TARGET_REPO"
-
-          # 获取所有本地 tag
-          TAGS=$(git tag)
-          if [ -z "$TAGS" ]; then
-            echo "本地没有 tag，跳过"
-            exit 0
-          fi
-
-          # 分页获取 Gitee 已存在的 tag 列表
-          EXISTING=/tmp/gitee_tags.txt
-          : > "$EXISTING"
-          page=1
-          while true; do
-            list=$(curl -sf -H "Authorization: token $GITEE_TOKEN" \
-              "https://gitee.com/api/v5/repos/$TARGET_REPO/tags?per_page=100&page=$page") || break
-            count=$(echo "$list" | jq 'length')
-            [ "$count" -eq 0 ] && break
-            echo "$list" | jq -r '.[].name' >> "$EXISTING"
-            [ "$count" -lt 100 ] && break
-            page=$((page + 1))
+          # 等待所有后台 Gitee 同步完成
+          echo "===== 全部版本构建完成，等待 Gitee 后台同步收尾 ====="
+          for pid in "${GITEE_PIDS[@]}"; do
+            wait "$pid" || echo "⚠️ 有 Gitee 同步子任务失败 (pid=$pid)"
           done
-          echo "Gitee 已有 tag: $(tr '\n' ' ' < "$EXISTING")"
-
-          for tag in $TAGS; do
-            if grep -qx "$tag" "$EXISTING"; then
-              echo "已存在，跳过: $tag"
-              continue
-            fi
-            # 获取本地 tag 的描述（注释）
-            tag_msg=$(git tag -l --format='%(contents:subject)' "$tag")
-            echo "创建 tag: $tag（基于 Gitee master）"
-            resp=$(curl -s -X POST \
-              -H "Authorization: token $GITEE_TOKEN" \
-              -H "Content-Type: application/json" \
-              -d "{\"refs\":\"master\",\"tag_name\":\"$tag\",\"tag_message\":\"$tag_msg\"}" \
-              "https://gitee.com/api/v5/repos/$TARGET_REPO/tags")
-            if echo "$resp" | jq -e '.name' > /dev/null 2>&1; then
-              echo "✅ 已创建: $tag"
-            else
-              msg=$(echo "$resp" | jq -r '.message // "未知错误"')
-              echo "❌ 创建失败 $tag: $msg"
-            fi
-          done
-          echo "✅ Tags 同步完成"
-
-      - name: 同步 Releases
-        run: |
-          set -e
-          echo "🔁 源仓库: $SOURCE_REPO"
-          echo "🔁 目标仓库: $TARGET_REPO"
-          
-          page=1
-          per_page=100
-          while true; do
-            echo "📄 获取第 $page 页 Release 列表"
-            releases=$(curl -s "https://api.github.com/repos/$SOURCE_REPO/releases?per_page=$per_page&page=$page")
-            if [ "$(echo "$releases" | jq length)" -eq 0 ]; then
-              break
-            fi
-            echo "$releases" | jq -c '.[]' | while read release; do
-              tag=$(echo "$release" | jq -r '.tag_name')
-              name=$(echo "$release" | jq -r '.name')
-              body=$(echo "$release" | jq -r '.body')
-              is_prerelease=$(echo "$release" | jq -r '.prerelease')
-              [ "$name" = "null" ] && name=""
-              [ "$body" = "null" ] && body=""
-              [ -z "$body" ] && body="blutter $tag"
-
-              echo "▶️ 正在处理 Release: $tag"
-
-              existing=$(curl -s -H "Authorization: token $GITEE_TOKEN" \
-                "https://gitee.com/api/v5/repos/$TARGET_REPO/releases/tags/$tag" | jq -r '.id // "null"')
-              
-              if [ "$existing" != "null" ]; then
-                echo "⚠️ Release $tag 已存在 (ID: $existing)，跳过创建"
-                release_id="$existing"
-              else
-                create_response=$(curl -s -X POST \
-                  -H "Authorization: token $GITEE_TOKEN" \
-                  -H "Content-Type: application/json" \
-                  -d "{\"tag_name\":\"$tag\", \"name\":\"$name\", \"body\":\"$body\", \"prerelease\":$is_prerelease, \"target_commitish\":\"master\"}" \
-                  "https://gitee.com/api/v5/repos/$TARGET_REPO/releases")
-                
-                echo "📝 创建响应: $create_response"
-                release_id=$(echo "$create_response" | jq -r '.id')
-                
-                if [ "$release_id" = "null" ] || [ -z "$release_id" ]; then
-                  error=$(echo "$create_response" | jq -r '.message // "未知错误"')
-                  echo "❌ 创建 Release $tag 失败: $error"
-                  continue
-                fi
-                echo "✅ Release $tag 创建成功 (ID: $release_id)"
-              fi
-
-              assets=$(echo "$release" | jq -r '.assets[]? | .browser_download_url + " " + .name')
-              echo "$assets" | while read -r asset_url asset_name; do
-                if [ -n "$asset_url" ] && [ -n "$asset_name" ] && [ "$asset_name" != "null" ]; then
-                  echo "⬇️ 下载附件: $asset_name"
-                  curl -L -o "$asset_name" "$asset_url"
-                  echo "⬆️ 上传附件到 Gitee Release $tag"
-                  upload_url="https://gitee.com/api/v5/repos/$TARGET_REPO/releases/$release_id/attach_files"
-                  curl -X POST \
-                    -H "Authorization: token $GITEE_TOKEN" \
-                    -F "file=@$asset_name" \
-                    "$upload_url" > /dev/null
-                  rm "$asset_name"
-                  echo "✅ 附件 $asset_name 上传完成"
-                fi
-              done
-            done
-            if [ "$(echo "$releases" | jq length)" -lt "$per_page" ]; then
-              break
-            fi
-            page=$((page + 1))
-          done
-          echo "🎉 所有 Release 同步完毕！"
+          echo "===== 全部构建与 Gitee 同步完成 ====="
