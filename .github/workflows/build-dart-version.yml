@@ -7,12 +7,13 @@ on:
         description: 'Dart 版本列表，逗号分隔或 JSON 数组（如 3.3.4, 3.4.2 或 [3.3.4, 3.4.2]）；分割成最多 20 个 worker 并行构建'
         required: true
         type: string
-      runner_version:
-        description: '编译环境（Ubuntu 版本，22.04 与手机 Droidspaces 环境一致）'
+      compile_env:
+        description: '编译环境（Windows / Ubuntu 22.04 / 24.04）'
         type: choice
         required: true
         default: '22.04'
         options:
+          - 'windows'
           - '22.04'
           - '24.04'
 
@@ -32,18 +33,22 @@ jobs:
         id: prepare
         env:
           INPUT_VERSIONS: ${{ inputs.dart_versions }}
-          RUNNER_VERSION: ${{ inputs.runner_version }}
+          COMPILE_ENV: ${{ inputs.compile_env }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # 支持 "[3.3.4, 3.4.2]" 或 "3.3.4, 3.4.2" 格式
           VERSIONS=$(echo "$INPUT_VERSIONS" | python3 -c "import json,sys; raw=sys.stdin.read().strip().strip('[]'); vs=[v.strip() for v in raw.split(',') if v.strip()]; print(json.dumps(vs))")
-          if [ "$RUNNER_VERSION" = "22.04" ]; then SUFFIX="22"; else SUFFIX="24"; fi
-          echo "编译环境: $RUNNER_VERSION (后缀 _$SUFFIX)"
+          if [ "$COMPILE_ENV" = "windows" ]; then SUFFIX="win"; elif [ "$COMPILE_ENV" = "22.04" ]; then SUFFIX="22"; else SUFFIX="24"; fi
+          echo "编译环境: $COMPILE_ENV (后缀 _$SUFFIX)"
           mapfile -t ALL < <(echo "$VERSIONS" | python3 -c "import json,sys; print('\n'.join(json.loads(sys.stdin.read())))")
           # 主 worker 先检查每个版本：本环境产物已存在则从编译列表排除
           FILTERED=()
           for ver in "${ALL[@]}"; do
-            asset="blutter_dartvm${ver}_android_arm64_${SUFFIX}"
+            if [ "$COMPILE_ENV" = "windows" ]; then
+              asset="blutter_dartvm${ver}_android_arm64_${SUFFIX}.exe"
+            else
+              asset="blutter_dartvm${ver}_android_arm64_${SUFFIX}"
+            fi
             if gh release view "$ver" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx "$asset"; then
               echo "排除（已有 $asset）: $ver"
             else
@@ -61,34 +66,52 @@ jobs:
           echo "过滤并排序后待构建版本: $VERSIONS"
 
   build:
-    name: 构建 Worker ${{ matrix.worker }}（Ubuntu ${{ inputs.runner_version }}）
+    name: 构建 Worker ${{ matrix.worker }}（${{ inputs.compile_env }}）
     needs: prepare
     if: needs.prepare.outputs.versions != '[]'
     strategy:
       fail-fast: false
       matrix:
         worker: ${{ fromJson(needs.prepare.outputs.workers) }}
-    runs-on: ubuntu-${{ inputs.runner_version }}-arm
+    runs-on: ${{ (inputs.compile_env == 'windows' && 'windows-latest') || format('ubuntu-{0}-arm', inputs.compile_env) }}
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 5G
       CCACHE_COMPILERCHECK: "none"
       CCACHE_NOHASHDIR: "true"
       CCACHE_NOHARDLINK: "true"
-      RUNNER_SUFFIX: ${{ (inputs.runner_version == '22.04' && '22') || '24' }}
+      RUNNER_SUFFIX: ${{ (inputs.compile_env == 'windows' && 'win') || (inputs.compile_env == '22.04' && '22') || '24' }}
       GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
       GITEE_TARGET_REPO: qeruiop_admin/blutter_build_actions
     steps:
       - uses: actions/checkout@v5
 
+      - name: 配置 MSVC x64 编译环境
+        if: inputs.compile_env == 'windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: 安装构建依赖
+        if: inputs.compile_env == 'windows'
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check -q ninja pyelftools requests
+          $scriptsDir = Join-Path (Split-Path (python -c "import sys;print(sys.executable)")) "Scripts"
+          Write-Host "Ninja dir: $scriptsDir"
+          "$scriptsDir" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          ninja --version
+
       - name: 恢复 CCache 缓存
+        if: inputs.compile_env != 'windows'
         uses: actions/cache@v5
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ inputs.runner_version }}-worker-${{ matrix.worker }}
-          restore-keys: ccache-${{ inputs.runner_version }}-
+          key: ccache-${{ inputs.compile_env }}-worker-${{ matrix.worker }}
+          restore-keys: ccache-${{ inputs.compile_env }}-
 
       - name: 安装依赖
+        if: inputs.compile_env != 'windows'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
@@ -96,7 +119,7 @@ jobs:
             cmake ninja-build git curl unzip jq \
             python3 python3-pip python3-pyelftools python3-requests \
             libcapstone-dev libicu-dev ccache
-          if [ "${{ inputs.runner_version }}" = "22.04" ]; then
+          if [ "${{ inputs.compile_env }}" = "22.04" ]; then
             echo "==> Ubuntu 22.04: 安装 gcc-13 / g++-13（提供 libstdc++-13，支持 std::format）"
             sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
             sudo apt-get update -qq
@@ -110,6 +133,7 @@ jobs:
           g++ --version | head -1
 
       - name: 初始化 CCache
+        if: inputs.compile_env != 'windows'
         run: |
           mkdir -p "${{ env.CCACHE_DIR }}"
           ccache -M ${{ env.CCACHE_MAXSIZE }}
@@ -125,6 +149,7 @@ jobs:
           echo "subset=$SUBSET" >> $GITHUB_OUTPUT
 
       - name: 构建并发布分片版本（构建与 Gitee 上传流水线重叠）
+        shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -189,16 +214,39 @@ jobs:
             return 1
           }
 
+          PLATFORM="${{ inputs.compile_env }}"
           GITEE_PIDS=()
+
+          # Windows 依赖（ICU + capstone）仅准备一次，后续版本复用
+          if [ "$PLATFORM" = "windows" ]; then
+            echo "===== 准备 Windows 第三方库（ICU + capstone）====="
+            python scripts/init_env_win.py || exit 1
+          fi
+
           for ver in ${{ steps.shard.outputs.subset }}; do
             asset="blutter_dartvm${ver}_android_arm64_${RUNNER_SUFFIX}"
+            if [ "$PLATFORM" = "windows" ]; then asset="${asset}.exe"; fi
             echo "===== 开始构建 Dart $ver ($asset) ====="
-            if python3 scripts/build.py clone-dart "$ver" \
-               && python3 scripts/build.py generate-sources "$ver" \
-               && python3 scripts/build.py build-dartvm "$ver" --arch aarch64 \
-               && python3 scripts/build.py build-blutter "$ver" --arch aarch64; then
+            BUILD_OK=false
+            if [ "$PLATFORM" = "windows" ]; then
+              if python scripts/build.py clone-dart "$ver" \
+                 && python scripts/build.py generate-sources "$ver" \
+                 && python scripts/build.py build-dartvm "$ver" --arch aarch64 \
+                 && python scripts/build.py build-blutter "$ver" --arch aarch64; then
+                mv "bin/blutter_dartvm${ver}_android_arm64.exe" "bin/$asset"
+                BUILD_OK=true
+              fi
+            else
+              if python3 scripts/build.py clone-dart "$ver" \
+                 && python3 scripts/build.py generate-sources "$ver" \
+                 && python3 scripts/build.py build-dartvm "$ver" --arch aarch64 \
+                 && python3 scripts/build.py build-blutter "$ver" --arch aarch64; then
+                mv "bin/blutter_dartvm${ver}_android_arm64" "bin/$asset"
+                BUILD_OK=true
+              fi
+            fi
+            if [ "$BUILD_OK" = "true" ]; then
               bin_file="bin/$asset"
-              mv "bin/blutter_dartvm${ver}_android_arm64" "$bin_file"
               echo "===== 发布 $ver ($bin_file) ====="
               if gh release create "$ver" "$bin_file" --title "blutter $ver" 2>/dev/null; then
                 echo "Release 已创建并上传: $bin_file"

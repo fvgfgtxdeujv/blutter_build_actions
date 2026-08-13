@@ -6,16 +6,17 @@ on:
       dart_version:
         description: 'Dart 版本（单个，如 3.3.4）'
         required: true
-      runner_version:
-        description: '编译环境（Ubuntu 版本，22.04 与手机 Droidspaces 环境一致）'
+      compile_env:
+        description: '编译环境（Windows / Ubuntu 22.04 / 24.04）'
         type: choice
         required: true
         default: '22.04'
         options:
+          - 'windows'
           - '22.04'
           - '24.04'
       upload_packages:
-        description: '上传 packages 目录（Dart VM 头文件和静态库）'
+        description: '上传 packages 目录（Dart VM 头文件和静态库，仅 Linux 生效）'
         type: boolean
         default: false
         required: false
@@ -24,14 +25,20 @@ on:
         type: boolean
         default: true
         required: false
+      upload_dlls:
+        description: '同时上传 Windows 运行依赖 dll 包（capstone + ICU，仅 Windows 生效）'
+        type: boolean
+        default: false
+        required: false
 
 permissions:
   contents: write
 
 jobs:
-  build-and-release:
-    name: 构建并发布
-    runs-on: ubuntu-${{ inputs.runner_version }}-arm
+  build-linux:
+    name: 构建并发布（Ubuntu ${{ inputs.compile_env }}）
+    if: inputs.compile_env != 'windows'
+    runs-on: ubuntu-${{ inputs.compile_env }}-arm
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 5G
@@ -65,7 +72,7 @@ jobs:
             cmake ninja-build git curl unzip \
             python3 python3-pip python3-pyelftools python3-requests \
             libcapstone-dev libicu-dev ccache
-          if [ "${{ inputs.runner_version }}" = "22.04" ]; then
+          if [ "${{ inputs.compile_env }}" = "22.04" ]; then
             echo "==> Ubuntu 22.04: 安装 gcc-13 / g++-13（提供 libstdc++-13，支持 std::format）"
             sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
             sudo apt-get update -qq
@@ -99,12 +106,10 @@ jobs:
       - name: 打包上传 packages (可选)
         if: inputs.upload_packages == true
         run: |
-          # 将二进制移动到 bin 目录
           mkdir -p bin
           mv bin/blutter_dartvm${{ env.DART_VERSION }}_android_arm64 . 2>/dev/null || true
           mv blutter_dartvm${{ env.DART_VERSION }}_android_arm64 bin/
 
-          # 打包 bin、packages 和 frida 模板（模板保持 scripts/ 相对结构）
           zip -r blutter_dartvm${{ env.DART_VERSION }}_android_arm64.zip bin packages
 
           echo "打包完成:"
@@ -131,4 +136,80 @@ jobs:
         with:
           name: Blutter 构建产物 ${{ env.DART_VERSION }}（Android ARM64）
           path: ${{ inputs.upload_packages && 'blutter_dartvm*.zip' || 'blutter_dartvm*' }}
+          if-no-files-found: error
+
+  build-windows:
+    name: 构建 Blutter Windows x64
+    if: inputs.compile_env == 'windows'
+    runs-on: windows-latest
+    env:
+      DART_VERSION: ${{ inputs.dart_version || '3.3.4' }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: 配置 MSVC x64 编译环境
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: 安装构建依赖
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check -q ninja pyelftools requests
+          $scriptsDir = Join-Path (Split-Path (python -c "import sys;print(sys.executable)")) "Scripts"
+          Write-Host "Ninja dir: $scriptsDir"
+          "$scriptsDir" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          ninja --version
+
+      - name: 准备 Windows 第三方库（ICU + capstone）
+        run: python scripts/init_env_win.py
+
+      - name: 克隆 Dart SDK
+        run: python scripts/build.py clone-dart ${{ env.DART_VERSION }}
+
+      - name: 生成 CMake 源文件
+        run: python scripts/build.py generate-sources ${{ env.DART_VERSION }}
+
+      - name: 构建 Dart VM
+        run: python scripts/build.py build-dartvm ${{ env.DART_VERSION }} --arch aarch64
+
+      - name: 构建 blutter
+        run: python scripts/build.py build-blutter ${{ env.DART_VERSION }} --arch aarch64
+
+      - name: 重命名产物为 _win 命名（直接上传 exe，运行时 dll 由 blutter.py 从仓库 build/ 目录下载）
+        shell: pwsh
+        run: |
+          Rename-Item -Path "bin/blutter_dartvm${{ env.DART_VERSION }}_android_arm64.exe" -NewName "blutter_dartvm${{ env.DART_VERSION }}_android_arm64_win.exe"
+          Get-ChildItem bin | ForEach-Object { Write-Host $_.Name }
+
+      - name: 创建 Release
+        if: inputs.upload_release == true
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.DART_VERSION }}
+          name: blutter ${{ env.DART_VERSION }}
+          files: bin/blutter_dartvm${{ env.DART_VERSION }}_android_arm64_win.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 上传构建产物
+        if: inputs.upload_release == false
+        uses: actions/upload-artifact@v5
+        with:
+          name: Blutter Windows x64 ${{ env.DART_VERSION }}
+          path: bin/blutter_dartvm${{ env.DART_VERSION }}_android_arm64_win.exe
+          if-no-files-found: error
+
+      - name: 打包 Windows 运行依赖 dll（可选）
+        if: inputs.upload_dlls == true
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "bin/capstone.dll","bin/icuuc73.dll","bin/icudt73.dll" -DestinationPath "blutter_dartvm${{ env.DART_VERSION }}_android_arm64_win_dlls.zip"
+
+      - name: 上传 dll 包
+        if: inputs.upload_dlls == true
+        uses: actions/upload-artifact@v5
+        with:
+          name: Blutter Windows x64 dlls ${{ env.DART_VERSION }}
+          path: blutter_dartvm${{ env.DART_VERSION }}_android_arm64_win_dlls.zip
           if-no-files-found: error
