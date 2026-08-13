@@ -1,16 +1,20 @@
 # Blutter 构建工作流
 
-用于构建 [blutter](https://github.com/worawit/blutter) 二进制文件的 GitHub Actions 工作流，支持单版本构建与多版本批量构建。
+用于构建 [blutter](https://github.com/worawit/blutter) 二进制文件的 GitHub Actions 工作流，支持单版本构建与多版本批量构建，支持 Linux（aarch64）与 Windows（x64）两种宿主编译环境。
 
 ## 产物
 
-每次 Release 包含以下内容：
+每次构建产物（Release 或 Actions Artifacts）包含以下内容：
 
 ### 1. Blutter 可执行文件
 
-| 文件 | 架构 | 说明 |
-|------|------|------|
-| `bin/blutter_dartvm<ver>_android_arm64` | aarch64 | 适用于 Android ARM64 环境 |
+| 文件 | 宿主平台 | 说明 |
+|------|---------|------|
+| `blutter_dartvm<ver>_android_arm64` | Linux aarch64 | 单版本构建的 Android ARM64 二进制 |
+| `blutter_dartvm<ver>_android_arm64_22` / `_24` | Linux aarch64 | 批量构建，按 Ubuntu 22.04 / 24.04 区分 |
+| `blutter_dartvm<ver>_android_arm64_win.exe` | Windows x64 | Windows 下解析 Android ARM64 快照 |
+
+> Windows 可执行文件运行需要三个 dll（`capstone.dll`、`icuuc73.dll`、`icudt73.dll`），由定制版 blutter.py 从仓库 `build/` 目录自动下载，详见「定制版 blutter」一节。
 
 ### 2. Dart VM 开发包（需要勾选 Upload Packages）
 
@@ -18,6 +22,8 @@
 |------|------|
 | `packages/include/dartvm<ver>_*` | Dart VM 头文件（API、运行时、编译器相关） |
 | `packages/lib/` | Dart VM 静态库 (`libdartvm*.a`) + CMake 配置文件 |
+
+Linux 打包为 `blutter_dartvm<ver>_android_arm64.zip`，Windows 打包为 `blutter_dartvm<ver>_android_arm64_win.zip`。
 
 ## 用法
 
@@ -28,9 +34,10 @@
 1. 进入仓库 → Actions → **构建 Blutter（单版本）** → **Run workflow**
 2. 填写参数：
    - **Dart version**（必填）：单个版本，如 `3.3.4`
-   - **编译环境（Ubuntu 版本）**（下拉选择）：`22.04` 或 `24.04`，默认 `22.04`（与手机 Droidspaces 环境一致）
-   - **Upload packages**（可选）：是否上传 Dart VM 开发包（默认不上传）
-   - **Upload release**（可选）：是否上传到 GitHub Release（默认开启）；关闭时构建产物仅以「构建产物」（Actions Artifacts）形式提供
+   - **编译环境**（下拉选择）：`windows` / `22.04` / `24.04`，默认 `22.04`（与手机 Droidspaces 环境一致）
+   - **Upload packages**（可选）：是否上传 Dart VM 开发包（Linux / Windows 均支持，默认不上传）
+   - **Upload release**（可选）：是否上传到 GitHub Release（默认关闭）；开启时同时上传 Release，关闭时构建产物仅以「构建产物」（Actions Artifacts）形式提供
+   - **Upload dlls**（可选，仅 Windows）：同时打包上传 Windows 运行依赖 dll（capstone + ICU），仅上传到 Artifacts，不上传 Release
 3. 编译完成后从对应 Release 或构建产物中下载文件
 
 ### 2. 批量构建 Blutter
@@ -40,21 +47,22 @@
 1. 进入仓库 → Actions → **批量构建 Blutter** → **Run workflow**
 2. 填写参数：
    - **Dart versions**（必填）：逗号分隔的版本列表，如 `3.3.4, 3.4.2, 3.5.2` 或 `[3.3.4, 3.4.2]`
-   - **编译环境（Ubuntu 版本）**（下拉选择）：`22.04` 或 `24.04`，默认 `22.04`（与手机 Droidspaces 环境一致）
+   - **编译环境**（下拉选择）：`windows` / `22.04` / `24.04`，默认 `22.04`（与手机 Droidspaces 环境一致）
 3. 编译完成后从各版本对应的 Release 下载文件
 
-每个版本 Release 包含两个二进制（通过两次运行分别补齐）：
+每个版本 Release 按编译环境包含对应产物（通过多次运行分别补齐，不同环境产物可并存于同一 Release）：
 
 | 文件 | 编译环境 |
 |------|----------|
 | `blutter_dartvm<ver>_android_arm64_22` | Ubuntu 22.04（与手机 Droidspaces 环境一致） |
 | `blutter_dartvm<ver>_android_arm64_24` | Ubuntu 24.04 |
+| `blutter_dartvm<ver>_android_arm64_win.exe` | Windows x64 |
 
-**并行机制**：先由 `prepare` 主 worker 解析版本列表，并检查每个版本在本环境（所选 Ubuntu 版本）的 Release 中是否已有对应后缀产物——已有则直接从编译列表排除；剩余版本再计算 worker 数（少于 20 时每版本一个 worker，最多 20 个），按列表顺序轮流分片给各 worker 并行编译。例如 10 个待构建版本在 22.04 下就是 10 个 job 并行编译（`build-dart-version` 界面中「构建 Worker 1~10」），已存在的版本不会占用 worker。
+**并行机制**：先由 `prepare` 主 worker 解析版本列表，并检查每个版本在本环境（所选编译环境）的 Release 中是否已有对应后缀产物——已有则直接从编译列表排除；剩余版本再计算 worker 数（少于 20 时每版本一个 worker，最多 20 个），按列表顺序轮流分片给各 worker 并行编译。例如 10 个待构建版本在 22.04 下就是 10 个 job 并行编译（`build-dart-version` 界面中「构建 Worker 1~10」），已存在的版本不会占用 worker。
 
-**增量补齐逻辑**：主 worker 检查时，某版本本环境后缀产物已存在即跳过（不构建不发布）；缺失才纳入编译。例如选择 `24.04` 时，已有 `_22` 的版本会补上 `_24`，已有 `_24` 的版本会排除；选择 `22.04` 时对称。单个版本构建失败自动跳过，不影响其他版本。
+**增量补齐逻辑**：主 worker 检查时，某版本本环境后缀产物已存在即跳过（不构建不发布）；缺失才纳入编译。例如选择 `24.04` 时，已有 `_22` 的版本会补上 `_24`，已有 `_24` 的版本会排除；选择 `22.04` 时对称；选择 `windows` 时补 `_win.exe`。单个版本构建失败自动跳过，不影响其他版本。
 
-**构建机制**：编译直接在所选环境对应的 GitHub 托管 arm64 runner（`ubuntu-22.04-arm` / `ubuntu-24.04-arm`）上原生执行；22.04 自动安装 gcc-13/g++-13，24.04 使用系统自带 gcc-13。Release 已存在时自动追加上传。
+**构建机制**：Linux 在所选 Ubuntu 版本对应的 GitHub 托管 arm64 runner（`ubuntu-22.04-arm` / `ubuntu-24.04-arm`）上原生执行，22.04 自动安装 gcc-13/g++-13，24.04 使用系统自带 gcc-13；Windows 在 `windows-latest` 上使用 MSVC x64 编译。Release 已存在时自动追加上传，并后台同步到 Gitee 镜像仓库。
 
 ### 3. 获取待构建 Dart 版本
 
@@ -90,9 +98,9 @@
 - 支持压缩/非压缩指针模式
 - 自动生成对应的 Frida 脚本模板
 
-## 定制版 blutter（Android 手机端）
+## 定制版 blutter（Android 手机端 / Windows）
 
-仓库根目录的 `定制版blutter.zip` 是精简后的手机端运行包，包含：
+仓库根目录的 `定制版blutter.zip` 是精简后的运行包，包含：
 
 | 文件 | 说明 |
 |------|------|
@@ -102,19 +110,19 @@
 
 ### 安装
 
-1. 下载 `定制版blutter.zip`，解压到手机 Droidspaces 容器的用户目录：
+1. 下载 `定制版blutter.zip`，解压到目标目录：
 
    ```bash
    unzip 定制版blutter.zip -d ~/blutter
    ```
 
-2. 安装运行依赖（Droidspaces Ubuntu 容器内）：
+2. 安装运行依赖：
 
    ```bash
    pip install pyelftools requests
    ```
 
-3. 运行 blutter 需要各 Dart 版本的二进制，从本仓库 Releases 下载后放入 `$HOME/blutter/bin/`。
+3. 运行 blutter 需要各 Dart 版本的二进制，从本仓库 Releases 下载后放入 `$HOME/blutter/bin/`。Windows 下首次运行时会自动补齐三个 dll，无需手动下载。
 
 ### 使用流程
 
@@ -130,13 +138,14 @@
 
 2. 脚本自动检测 Dart 版本，并在 `$HOME/blutter/bin/` 查找对应版本的二进制：
    - **存在**：直接解析，输出到 `out` 目录
-   - **不存在**：自动下载匹配版本（自动识别系统为 22.04 还是 24.04，优先下载带 `_22` / `_24` 后缀的二进制并重命名为无后缀格式放入 bin），随后自动继续解析；若下载失败则打印所需版本号，提示手动下载
+   - **不存在**：自动下载匹配版本（Linux 自动识别系统为 22.04 还是 24.04，优先下载带 `_22` / `_24` 后缀的二进制并重命名为无后缀格式放入 bin；Windows 下下载 `_win.exe`），随后自动继续解析；若下载失败则打印所需版本号，提示手动下载
+   - **Windows**：运行前自动检查三个运行 dll（`capstone.dll`、`icuuc73.dll`、`icudt73.dll`），缺失时从仓库 `build/` 目录自动下载到 `~/blutter/bin/`
 
 下载源自动选择（国内 / 国外）：脚本综合 **系统语言**（是否中文环境）、**系统时区**（是否 `Asia/Shanghai` 等国内时区）、**GitHub 延迟**（`curl` 实测 `https://github.com` 响应时间）三个信号判断网络区域，国内信号 ≥ 2 判定为国内。判定国内时优先从 Gitee 镜像 `qeruiop_admin/blutter_build_actions` 下载，否则优先从 GitHub `fvgfgtxdeujv/blutter_build_actions` 下载；主源失败自动切换到备选源。
 
 3. 若自动下载失败，从 Releases 手动下载对应版本二进制放入 `$HOME/blutter/bin/`，重新运行命令即可解析。
 
-二进制命名格式：`blutter_dartvm<版本>_android_arm64`，例如 Dart 3.4.2 对应 `blutter_dartvm3.4.2_android_arm64`。批量构建的产物带环境后缀（`_22` / `_24`），手机 Droidspaces 为 Ubuntu 22.04，建议下载 `blutter_dartvm3.4.2_android_arm64_22`，放入 bin 目录后重命名为 `blutter_dartvm3.4.2_android_arm64`。
+二进制命名格式：`blutter_dartvm<版本>_android_arm64`，例如 Dart 3.4.2 对应 `blutter_dartvm3.4.2_android_arm64`。批量构建的 Linux 产物带环境后缀（`_22` / `_24`），手机 Droidspaces 为 Ubuntu 22.04，建议下载 `blutter_dartvm3.4.2_android_arm64_22`，放入 bin 目录后重命名为 `blutter_dartvm3.4.2_android_arm64`。Windows 产物为 `blutter_dartvm<版本>_android_arm64_win.exe`，直接放入 bin 目录即可（blutter.py 支持 `_win` 后缀定位）。
 
 ### Frida 模板定位
 
@@ -148,14 +157,17 @@
 
 ## 构建环境
 
-编译在 GitHub 托管的 arm64 runner（`ubuntu-22.04-arm` / `ubuntu-24.04-arm`）上原生执行，无需 Docker。每个 workflow 提供「编译环境（Ubuntu 版本）」下拉选择框：
+每个 workflow 提供「编译环境」下拉选择框，三选一：
 
 | 选项 | runner | 特点 |
 |------|--------|------|
 | `22.04`（默认） | `ubuntu-22.04-arm` | 与 Android 手机 Droidspaces 容器的 Ubuntu 22.04 rootfs 一致；自动安装 gcc-13/g++-13 |
 | `24.04` | `ubuntu-24.04-arm` | 系统自带 gcc-13，无需额外工具链 |
+| `windows` | `windows-latest` | MSVC x64 编译 Windows 宿主，解析 Android ARM64 快照 |
 
-> 建议默认使用 `22.04`：编译环境与产物运行环境（Droidspaces Ubuntu 22.04 rootfs）完全一致，动态链接的库版本直接匹配。
+> Linux 建议默认使用 `22.04`：编译环境与产物运行环境（Droidspaces Ubuntu 22.04 rootfs）完全一致，动态链接的库版本直接匹配。
+
+### Linux 构建说明
 
 | 项 | 说明 |
 |----|------|
@@ -165,14 +177,28 @@
 | ICU | 动态链接系统 `libicuuc.so`（22.04 自带 libicu70，与运行环境一致） |
 | capstone | 动态链接系统 `libcapstone.so`（运行环境需安装 libcapstone） |
 
+### Windows 构建说明
+
+| 项 | 说明 |
+|----|------|
+| 宿主系统 | `windows-latest`（MSVC x64 编译环境，`ilammy/msvc-dev-cmd@v1` 配置） |
+| 第三方库 | ICU 73.2 win64 + capstone 4.0.2 win64，由 `scripts/init_env_win.py` 自动下载解压 |
+| 运行期依赖 | `capstone.dll`、`icuuc73.dll`、`icudt73.dll` 不随 exe 打包，从仓库 `build/` 目录分发（blutter.py 自动下载） |
+| 产物 | `blutter_dartvm<ver>_android_arm64_win.exe`，目标仍为 Android ARM64 快照解析 |
+
 ## 依赖
 
-runner 启动后自动安装以下依赖（`22.04` 额外安装 gcc-13 工具链）：
+Linux runner 启动后自动安装以下依赖（`22.04` 额外安装 gcc-13 工具链）：
 - CMake / Ninja
 - libcapstone-dev（反汇编库）
 - libicu-dev（国际化库）
 - CCache（编译缓存加速）
 - Python3 / pip / pyelftools / requests
+
+Windows runner 启动后自动安装：
+- MSVC x64 编译环境
+- Python3 / pip / ninja / pyelftools / requests
+- ICU + capstone win64（`scripts/init_env_win.py` 下载）
 
 ## 输出文件说明
 

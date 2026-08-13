@@ -16,7 +16,7 @@ on:
           - '22.04'
           - '24.04'
       upload_packages:
-        description: '上传 packages 目录（Dart VM 头文件和静态库，Linux/Windows 均生效）'
+        description: '上传 packages 目录（Dart VM 头文件和静态库）'
         type: boolean
         default: false
         required: false
