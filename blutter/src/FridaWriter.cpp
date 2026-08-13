@@ -4,7 +4,11 @@
 #include <filesystem>
 #include <vector>
 #include <climits>
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <unistd.h>
+#endif
 #include "Util.h"
 
 #ifndef FRIDA_TEMPLATE_DIR
@@ -17,6 +21,16 @@ static std::filesystem::path FindFridaTemplate()
 	std::vector<std::filesystem::path> candidates;
 
 	// 优先按可执行文件所在目录定位，保证产物可在任意路径运行
+#ifdef _WIN32
+	char exePath[MAX_PATH];
+	DWORD len = GetModuleFileNameA(NULL, exePath, MAX_PATH);
+	if (len != 0) {
+		exePath[len] = '\0';
+		std::filesystem::path dir = std::filesystem::path(exePath).parent_path();
+		candidates.push_back(dir / FRIDA_TEMPLATE_DIR / "frida.template.js");
+		candidates.push_back(dir.parent_path() / FRIDA_TEMPLATE_DIR / "frida.template.js");
+	}
+#else
 	char exePath[PATH_MAX];
 	ssize_t len = readlink("/proc/self/exe", exePath, sizeof(exePath) - 1);
 	if (len != -1) {
@@ -25,6 +39,7 @@ static std::filesystem::path FindFridaTemplate()
 		candidates.push_back(dir / FRIDA_TEMPLATE_DIR / "frida.template.js");
 		candidates.push_back(dir.parent_path() / FRIDA_TEMPLATE_DIR / "frida.template.js");
 	}
+#endif
 
 	// 最后回退到当前工作目录
 	candidates.push_back(name);
