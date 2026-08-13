@@ -36,7 +36,7 @@ permissions:
 
 jobs:
   build-linux:
-    name: 构建并发布（Ubuntu ${{ inputs.compile_env }}）
+    name: 构建并发布（Linux）
     if: inputs.compile_env != 'windows'
     runs-on: ubuntu-${{ inputs.compile_env }}-arm
     env:
