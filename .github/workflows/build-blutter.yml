@@ -16,7 +16,7 @@ on:
           - '22.04'
           - '24.04'
       upload_packages:
-        description: '上传 packages 目录（Dart VM 头文件和静态库，仅 Linux 生效）'
+        description: '上传 packages 目录（Dart VM 头文件和静态库，Linux/Windows 均生效）'
         type: boolean
         default: false
         required: false
@@ -182,13 +182,21 @@ jobs:
           Rename-Item -Path "bin/blutter_dartvm${{ env.DART_VERSION }}_android_arm64.exe" -NewName "blutter_dartvm${{ env.DART_VERSION }}_android_arm64_win.exe"
           Get-ChildItem bin | ForEach-Object { Write-Host $_.Name }
 
+      - name: 打包上传 packages (可选)
+        if: inputs.upload_packages == true
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "bin","packages" -DestinationPath "blutter_dartvm${{ env.DART_VERSION }}_android_arm64_win.zip" -Force
+          Write-Host "打包完成:"
+          Get-ChildItem "blutter_dartvm${{ env.DART_VERSION }}_android_arm64_win.zip" | ForEach-Object { Write-Host $_.Name }
+
       - name: 创建 Release
         if: inputs.upload_release == true
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.DART_VERSION }}
           name: blutter ${{ env.DART_VERSION }}
-          files: bin/blutter_dartvm${{ env.DART_VERSION }}_android_arm64_win.exe
+          files: ${{ inputs.upload_packages && 'blutter_dartvm*_win.zip' || 'bin/blutter_dartvm*_win.exe' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -197,7 +205,7 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: Blutter Windows x64 ${{ env.DART_VERSION }}
-          path: bin/blutter_dartvm${{ env.DART_VERSION }}_android_arm64_win.exe
+          path: ${{ inputs.upload_packages && 'blutter_dartvm*_win.zip' || 'bin/blutter_dartvm*_win.exe' }}
           if-no-files-found: error
 
       - name: 打包 Windows 运行依赖 dll（可选）
