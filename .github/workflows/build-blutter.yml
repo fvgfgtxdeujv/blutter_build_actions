@@ -176,6 +176,12 @@ jobs:
       - name: 构建 blutter
         run: python scripts/build.py build-blutter ${{ env.DART_VERSION }} --arch aarch64
 
+      - name: 构建 Dart VM（windows_x64，用于 Flutter Windows 桌面 app.so）
+        run: python scripts/build.py build-dartvm ${{ env.DART_VERSION }} --arch windows_x64
+
+      - name: 构建 blutter（windows_x64）
+        run: python scripts/build.py build-blutter ${{ env.DART_VERSION }} --arch windows_x64
+
       - name: 重命名产物为 _win 命名（直接上传 exe，运行时 dll 由 blutter.py 从仓库 build/ 目录下载）
         shell: pwsh
         run: |
@@ -186,9 +192,9 @@ jobs:
         if: inputs.upload_packages == true
         shell: pwsh
         run: |
-          Compress-Archive -Path "bin","packages" -DestinationPath "blutter_dartvm${{ env.DART_VERSION }}_android_arm64_win.zip" -Force
+          Compress-Archive -Path "bin","packages" -DestinationPath "blutter_dartvm${{ env.DART_VERSION }}_win.zip" -Force
           Write-Host "打包完成:"
-          Get-ChildItem "blutter_dartvm${{ env.DART_VERSION }}_android_arm64_win.zip" | ForEach-Object { Write-Host $_.Name }
+          Get-ChildItem "blutter_dartvm${{ env.DART_VERSION }}_win.zip" | ForEach-Object { Write-Host $_.Name }
 
       - name: 创建 Release
         if: inputs.upload_release == true
@@ -196,7 +202,7 @@ jobs:
         with:
           tag_name: ${{ env.DART_VERSION }}
           name: blutter ${{ env.DART_VERSION }}
-          files: ${{ inputs.upload_packages && 'blutter_dartvm*_win.zip' || 'bin/blutter_dartvm*_win.exe' }}
+          files: ${{ inputs.upload_packages && 'blutter_dartvm*_win.zip' || 'bin/blutter_dartvm*.exe' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -205,7 +211,7 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: Blutter Windows x64 ${{ env.DART_VERSION }}
-          path: ${{ inputs.upload_packages && 'blutter_dartvm*_win.zip' || 'bin/blutter_dartvm*_win.exe' }}
+          path: ${{ inputs.upload_packages && 'blutter_dartvm*_win.zip' || 'bin/blutter_dartvm*.exe' }}
           if-no-files-found: error
 
       - name: 打包 Windows 运行依赖 dll（可选）

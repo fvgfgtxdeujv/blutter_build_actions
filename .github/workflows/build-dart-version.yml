@@ -46,12 +46,21 @@ jobs:
           for ver in "${ALL[@]}"; do
             if [ "$COMPILE_ENV" = "windows" ]; then
               asset="blutter_dartvm${ver}_android_arm64_${SUFFIX}.exe"
+              asset2="blutter_dartvm${ver}_windows_x64.exe"
             else
               asset="blutter_dartvm${ver}_android_arm64_${SUFFIX}"
+              asset2=""
             fi
-            if gh release view "$ver" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx "$asset"; then
-              echo "排除（已有 $asset）: $ver"
+            ASSETS=$(gh release view "$ver" --json assets --jq '.assets[].name' 2>/dev/null)
+            MISSING=()
+            echo "$ASSETS" | grep -qx "$asset" || MISSING+=("$asset")
+            if [ -n "$asset2" ]; then
+              echo "$ASSETS" | grep -qx "$asset2" || MISSING+=("$asset2")
+            fi
+            if [ ${#MISSING[@]} -eq 0 ]; then
+              echo "排除（已有全部产物）: $ver"
             else
+              echo "缺产物（${MISSING[*]}），纳入构建: $ver"
               FILTERED+=("$ver")
             fi
           done
@@ -232,7 +241,9 @@ jobs:
               if python scripts/build.py clone-dart "$ver" \
                  && python scripts/build.py generate-sources "$ver" \
                  && python scripts/build.py build-dartvm "$ver" --arch aarch64 \
-                 && python scripts/build.py build-blutter "$ver" --arch aarch64; then
+                 && python scripts/build.py build-blutter "$ver" --arch aarch64 \
+                 && python scripts/build.py build-dartvm "$ver" --arch windows_x64 \
+                 && python scripts/build.py build-blutter "$ver" --arch windows_x64; then
                 mv "bin/blutter_dartvm${ver}_android_arm64.exe" "bin/$asset"
                 BUILD_OK=true
               fi
@@ -247,13 +258,19 @@ jobs:
             fi
             if [ "$BUILD_OK" = "true" ]; then
               bin_file="bin/$asset"
-              echo "===== 发布 $ver ($bin_file) ====="
-              if gh release create "$ver" "$bin_file" --title "blutter $ver" 2>/dev/null; then
-                echo "Release 已创建并上传: $bin_file"
+              upload_args=("$bin_file")
+              if [ "$PLATFORM" = "windows" ]; then
+                upload_args+=("bin/blutter_dartvm${ver}_windows_x64.exe")
+                echo "===== 发布 $ver ($bin_file + windows_x64.exe) ====="
+              else
+                echo "===== 发布 $ver ($bin_file) ====="
+              fi
+              if gh release create "$ver" "${upload_args[@]}" --title "blutter $ver" 2>/dev/null; then
+                echo "Release 已创建并上传: ${upload_args[*]}"
               else
                 for i in 1 2 3 4 5; do
-                  if gh release upload "$ver" "$bin_file" --clobber 2>/dev/null; then
-                    echo "已追加上传到已存在的 Release: $bin_file"
+                  if gh release upload "$ver" "${upload_args[@]}" --clobber 2>/dev/null; then
+                    echo "已追加上传到已存在的 Release: ${upload_args[*]}"
                     break
                   fi
                   echo "Release 尚未就绪，等待后重试 ($i/5)"

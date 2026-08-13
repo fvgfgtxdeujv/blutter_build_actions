@@ -11,7 +11,7 @@
 | `blutter_dartvm<ver>_android_arm64` | Linux aarch64 | 单版本构建产物 |
 | `blutter_dartvm<ver>_android_arm64_22` / `_24` | Linux aarch64 | 批量构建产物，按 Ubuntu 22.04 / 24.04 区分 |
 | `blutter_dartvm<ver>_android_arm64_win.exe` | Windows x64 | Windows 下解析 Android ARM64 快照 |
-| `blutter_dartvm<ver>_windows_x64`（`build.py --arch windows_x64`） | Windows x64 | 分析 Flutter Windows 桌面 `app.so`（MVP：对象池 + 汇编注释 + IDA 脚本） |
+| `blutter_dartvm<ver>_windows_x64.exe` | Windows x64 | Windows 下分析 Flutter Windows 桌面 `app.so`（MVP：对象池 + 汇编注释 + IDA 脚本），由 Windows workflow 一并构建 |
 
 可选上传内容：
 - **packages 目录**（Dart VM 头文件 + 静态库）：勾选 `Upload packages` 时打包上传（Linux 为 `.zip`，Windows 为 `_win.zip`）
