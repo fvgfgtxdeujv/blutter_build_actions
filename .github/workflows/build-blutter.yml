@@ -30,6 +30,11 @@ on:
         type: boolean
         default: false
         required: false
+      build_windows_x64:
+        description: '同时构建 Windows x64 桌面分析二进制（Flutter Windows app.so）'
+        type: boolean
+        default: false
+        required: false
 
 permissions:
   contents: write
@@ -177,9 +182,11 @@ jobs:
         run: python scripts/build.py build-blutter ${{ env.DART_VERSION }} --arch aarch64
 
       - name: 构建 Dart VM（windows_x64，用于 Flutter Windows 桌面 app.so）
+        if: inputs.build_windows_x64 == true
         run: python scripts/build.py build-dartvm ${{ env.DART_VERSION }} --arch windows_x64
 
       - name: 构建 blutter（windows_x64）
+        if: inputs.build_windows_x64 == true
         run: python scripts/build.py build-blutter ${{ env.DART_VERSION }} --arch windows_x64
 
       - name: 重命名产物为 _win 命名（直接上传 exe，运行时 dll 由 blutter.py 从仓库 build/ 目录下载）

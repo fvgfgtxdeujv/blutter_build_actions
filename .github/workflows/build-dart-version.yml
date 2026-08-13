@@ -16,6 +16,11 @@ on:
           - 'windows'
           - '22.04'
           - '24.04'
+      build_windows_x64:
+        description: 'Windows 环境额外构建 Windows x64 桌面分析二进制（Flutter Windows app.so）'
+        type: boolean
+        default: false
+        required: false
 
 permissions:
   contents: write
@@ -34,6 +39,7 @@ jobs:
         env:
           INPUT_VERSIONS: ${{ inputs.dart_versions }}
           COMPILE_ENV: ${{ inputs.compile_env }}
+          BUILD_X64: ${{ inputs.build_windows_x64 }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # 支持 "[3.3.4, 3.4.2]" 或 "3.3.4, 3.4.2" 格式
@@ -46,7 +52,11 @@ jobs:
           for ver in "${ALL[@]}"; do
             if [ "$COMPILE_ENV" = "windows" ]; then
               asset="blutter_dartvm${ver}_android_arm64_${SUFFIX}.exe"
-              asset2="blutter_dartvm${ver}_windows_x64.exe"
+              if [ "$BUILD_X64" = "true" ]; then
+                asset2="blutter_dartvm${ver}_windows_x64.exe"
+              else
+                asset2=""
+              fi
             else
               asset="blutter_dartvm${ver}_android_arm64_${SUFFIX}"
               asset2=""
@@ -161,6 +171,7 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BUILD_X64: ${{ inputs.build_windows_x64 }}
         run: |
           # 后台同步单个版本到 Gitee（tag + release + 附件），附件直接用本地产物
           sync_to_gitee() {
@@ -241,11 +252,13 @@ jobs:
               if python scripts/build.py clone-dart "$ver" \
                  && python scripts/build.py generate-sources "$ver" \
                  && python scripts/build.py build-dartvm "$ver" --arch aarch64 \
-                 && python scripts/build.py build-blutter "$ver" --arch aarch64 \
-                 && python scripts/build.py build-dartvm "$ver" --arch windows_x64 \
-                 && python scripts/build.py build-blutter "$ver" --arch windows_x64; then
-                mv "bin/blutter_dartvm${ver}_android_arm64.exe" "bin/$asset"
-                BUILD_OK=true
+                 && python scripts/build.py build-blutter "$ver" --arch aarch64; then
+                if [ "$BUILD_X64" != "true" ] \
+                   || (python scripts/build.py build-dartvm "$ver" --arch windows_x64 \
+                       && python scripts/build.py build-blutter "$ver" --arch windows_x64); then
+                  mv "bin/blutter_dartvm${ver}_android_arm64.exe" "bin/$asset"
+                  BUILD_OK=true
+                fi
               fi
             else
               if python3 scripts/build.py clone-dart "$ver" \
@@ -259,7 +272,7 @@ jobs:
             if [ "$BUILD_OK" = "true" ]; then
               bin_file="bin/$asset"
               upload_args=("$bin_file")
-              if [ "$PLATFORM" = "windows" ]; then
+              if [ "$PLATFORM" = "windows" ] && [ "$BUILD_X64" = "true" ]; then
                 upload_args+=("bin/blutter_dartvm${ver}_windows_x64.exe")
                 echo "===== 发布 $ver ($bin_file + windows_x64.exe) ====="
               else

@@ -26,10 +26,11 @@ Actions → **构建 Blutter（单版本）** → Run workflow。参数：
 - **Dart version**：单个版本，如 `3.3.4`
 - **编译环境**：`windows` / `22.04` / `24.04`，默认 `22.04`（与手机 Droidspaces 环境一致）
 - **Upload packages / Upload release / Upload dlls**：均为可选项；Release 默认不上传，勾选后产物才进入 Release，否则仅以 Actions Artifacts 形式提供（dll 始终只进 Artifacts）
+- **Build Windows x64**（可选，默认关闭）：勾选后 Windows 环境额外构建 `blutter_dartvm<ver>_windows_x64.exe`（分析 Flutter Windows 桌面 `app.so`），并随 Release/Artifacts 一并上传
 
 ### 2. 批量构建
 
-Actions → **批量构建 Blutter** → Run workflow。参数：**Dart versions**（逗号分隔版本列表）+ **编译环境**。一次处理多个版本，分割成最多 20 个 worker 并行构建，并支持增量补齐：某版本该环境产物已存在则自动跳过，缺失才构建发布。产物同时上传 GitHub Release 并后台同步到 Gitee 镜像，不同环境的产物可并存于同一 Release。
+Actions → **批量构建 Blutter** → Run workflow。参数：**Dart versions**（逗号分隔版本列表）+ **编译环境** + **Build Windows x64**（可选，默认关闭，勾选后 Windows 批量构建额外产出 windows_x64 二进制）。一次处理多个版本，分割成最多 20 个 worker 并行构建，并支持增量补齐：某版本该环境产物已存在则自动跳过，缺失才构建发布。产物同时上传 GitHub Release 并后台同步到 Gitee 镜像，不同环境的产物可并存于同一 Release。
 
 ### 3. 获取待构建版本
 
