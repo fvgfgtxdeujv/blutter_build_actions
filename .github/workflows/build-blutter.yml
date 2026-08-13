@@ -23,7 +23,7 @@ on:
       upload_release:
         description: '上传到 GitHub Release（关闭则仅上传 Artifacts）'
         type: boolean
-        default: true
+        default: false
         required: false
       upload_dlls:
         description: '同时上传 Windows 运行依赖 dll 包（capstone + ICU，仅 Windows 生效）'
