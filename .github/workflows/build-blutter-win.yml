@@ -46,16 +46,15 @@ jobs:
       - name: 构建 blutter
         run: python scripts/build.py build-blutter ${{ inputs.dart_version }} --arch aarch64
 
-      - name: 重命名产物并打包（仅 exe，运行时 dll 由 blutter.py 从仓库 build/ 目录下载）
+      - name: 重命名产物为 _win 命名（直接上传 exe，运行时 dll 由 blutter.py 从仓库 build/ 目录下载）
         shell: pwsh
         run: |
           Rename-Item -Path "bin/blutter_dartvm${{ inputs.dart_version }}_android_arm64.exe" -NewName "blutter_dartvm${{ inputs.dart_version }}_android_arm64_win.exe"
           Get-ChildItem bin | ForEach-Object { Write-Host $_.Name }
-          Compress-Archive -Path "bin/blutter_dartvm${{ inputs.dart_version }}_android_arm64_win.exe" -DestinationPath "blutter_dartvm${{ inputs.dart_version }}_android_arm64_win.zip"
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v5
         with:
           name: Blutter Windows x64 ${{ inputs.dart_version }}
-          path: blutter_dartvm${{ inputs.dart_version }}_android_arm64_win.zip
+          path: bin/blutter_dartvm${{ inputs.dart_version }}_android_arm64_win.exe
           if-no-files-found: error
