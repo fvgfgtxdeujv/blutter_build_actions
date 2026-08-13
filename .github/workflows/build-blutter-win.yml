@@ -6,14 +6,9 @@ on:
       dart_version:
         description: 'Dart 版本（单个，如 3.3.4）'
         required: true
-      upload_release:
-        description: '上传到 GitHub Release（关闭则仅上传 Artifacts）'
-        type: boolean
-        default: true
-        required: false
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build-win:
@@ -58,18 +53,7 @@ jobs:
           Get-ChildItem bin | ForEach-Object { Write-Host $_.Name }
           Compress-Archive -Path "bin/blutter_dartvm${{ inputs.dart_version }}_android_arm64_win.exe","bin/capstone.dll","bin/icudt73.dll","bin/icuuc73.dll" -DestinationPath "blutter_dartvm${{ inputs.dart_version }}_android_arm64_win.zip"
 
-      - name: 创建 Release
-        if: inputs.upload_release == true
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ inputs.dart_version }}
-          name: blutter ${{ inputs.dart_version }}
-          files: blutter_dartvm${{ inputs.dart_version }}_android_arm64_win.zip
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: 上传构建产物
-        if: inputs.upload_release == false
         uses: actions/upload-artifact@v5
         with:
           name: Blutter Windows x64 ${{ inputs.dart_version }}
