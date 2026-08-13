@@ -1,0 +1,77 @@
+name: 构建 Blutter（Windows 单版本测试）
+
+on:
+  workflow_dispatch:
+    inputs:
+      dart_version:
+        description: 'Dart 版本（单个，如 3.3.4）'
+        required: true
+      upload_release:
+        description: '上传到 GitHub Release（关闭则仅上传 Artifacts）'
+        type: boolean
+        default: true
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-win:
+    name: 构建 Blutter Windows x64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: 配置 MSVC x64 编译环境
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: 安装构建依赖
+        shell: pwsh
+        run: |
+          python -m pip install --disable-pip-version-check -q ninja pyelftools requests
+          $scriptsDir = Join-Path (Split-Path (python -c "import sys;print(sys.executable)")) "Scripts"
+          Write-Host "Ninja dir: $scriptsDir"
+          "$scriptsDir" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          ninja --version
+
+      - name: 准备 Windows 第三方库（ICU + capstone）
+        run: python scripts/init_env_win.py
+
+      - name: 克隆 Dart SDK
+        run: python scripts/build.py clone-dart ${{ inputs.dart_version }}
+
+      - name: 生成 CMake 源文件
+        run: python scripts/build.py generate-sources ${{ inputs.dart_version }}
+
+      - name: 构建 Dart VM
+        run: python scripts/build.py build-dartvm ${{ inputs.dart_version }} --arch aarch64
+
+      - name: 构建 blutter
+        run: python scripts/build.py build-blutter ${{ inputs.dart_version }} --arch aarch64
+
+      - name: 重命名产物并打包（exe + 运行依赖 dll）
+        shell: pwsh
+        run: |
+          Rename-Item -Path "bin/blutter_dartvm${{ inputs.dart_version }}_android_arm64.exe" -NewName "blutter_dartvm${{ inputs.dart_version }}_android_arm64_win.exe"
+          Get-ChildItem bin | ForEach-Object { Write-Host $_.Name }
+          Compress-Archive -Path "bin/blutter_dartvm${{ inputs.dart_version }}_android_arm64_win.exe","bin/capstone.dll","bin/icudt73.dll","bin/icuuc73.dll" -DestinationPath "blutter_dartvm${{ inputs.dart_version }}_android_arm64_win.zip"
+
+      - name: 创建 Release
+        if: inputs.upload_release == true
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.dart_version }}
+          name: blutter ${{ inputs.dart_version }}
+          files: blutter_dartvm${{ inputs.dart_version }}_android_arm64_win.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 上传构建产物
+        if: inputs.upload_release == false
+        uses: actions/upload-artifact@v5
+        with:
+          name: Blutter Windows x64 ${{ inputs.dart_version }}
+          path: blutter_dartvm${{ inputs.dart_version }}_android_arm64_win.zip
+          if-no-files-found: error

@@ -5,6 +5,7 @@ Called from GitHub Actions workflow
 """
 import os
 import sys
+import stat
 import platform
 import subprocess
 import shutil
@@ -35,11 +36,34 @@ HOST_MACHINE = platform.machine()
 
 
 def is_cross_compile(arch):
+    if sys.platform == 'win32':
+        return False
     if arch == "aarch64":
         return HOST_MACHINE != "aarch64"
     if arch == "x86_64":
         return HOST_MACHINE not in ("x86_64", "amd64")
     return False
+
+
+def _rmtree_ro(path):
+    """Remove directory tree, handling read-only files (e.g. on Windows)."""
+    def _onerror(func, p, _):
+        try:
+            os.chmod(p, stat.S_IWRITE)
+        except OSError:
+            pass
+        func(p)
+    shutil.rmtree(path, onerror=_onerror)
+
+
+def _cmake_launcher_args():
+    """ccache compiler launcher is skipped on Windows (MSVC + no ccache)."""
+    if sys.platform == 'win32':
+        return []
+    return [
+        "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
+        "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
+    ]
 
 
 def run(cmd, **kwargs):
@@ -151,6 +175,39 @@ def patch_icu_compat(version):
         print("[=] No ICU patches needed")
 
 
+def patch_unwinding_records_win(version, clone_dir):
+    """Windows only: since Dart 3.8, RUNTIME_FUNCTION is declared when
+    DART_HOST_OS_WINDOWS and TARGET_ARCH_ARM64 are set. Patch
+    runtime/platform/unwinding_records.h to keep the declaration so the
+    arm64 runtime builds with MSVC."""
+    major, minor = (int(x) for x in version.split(".")[:2])
+    if (major, minor) < (3, 8):
+        print("[=] No unwinding_records patch needed for this Dart version")
+        return
+
+    path = clone_dir / "runtime" / "platform" / "unwinding_records.h"
+    if not path.exists():
+        print("[=] unwinding_records.h not found, skip patch")
+        return
+
+    data = path.read_bytes()
+    new = data.replace(
+        b"\n#if !defined(DART_HOST_OS_WINDOWS) || !defined(HOST_ARCH_ARM64)",
+        b"\n#if !defined(DART_HOST_OS_WINDOWS) // !defined(HOST_ARCH_ARM64)",
+    )
+    if new == data:
+        # newer Dart version uses static_assert for checking RUNTIME_FUNCTION size
+        new = data.replace(
+            b"\nstatic_assert(sizeof(",
+            b"\n//static_assert(sizeof(",
+        )
+    if new != data:
+        path.write_bytes(new)
+        print("[+] Patched unwinding_records.h for Windows (Dart 3.8+)")
+    else:
+        print("[=] No unwinding_records patch applied (pattern not found)")
+
+
 def generate_toolchain_file():
     """Generate CMake toolchain file for aarch64 cross-compilation"""
     print("[*] Generating toolchain file...")
@@ -192,7 +249,7 @@ def clone_dart_sdk(version):
     clone_dir = SDK_DIR / f"v{version}"
 
     if clone_dir.exists():
-        shutil.rmtree(clone_dir)
+        _rmtree_ro(clone_dir)
 
     # Full clone with complete history
     run([GIT_CMD, "clone", "-c", "advice.detachedHead=false",
@@ -205,7 +262,7 @@ def clone_dart_sdk(version):
         target = clone_dir / dir_name
         if target.exists():
             if target.is_dir():
-                shutil.rmtree(target)
+                _rmtree_ro(target)
             else:
                 target.unlink()
     
@@ -215,7 +272,7 @@ def clone_dart_sdk(version):
         for item in third_party.iterdir():
             if item.name != "double-conversion":
                 if item.is_dir():
-                    shutil.rmtree(item)
+                    _rmtree_ro(item)
                 else:
                     item.unlink()
 
@@ -249,6 +306,10 @@ def clone_dart_sdk(version):
 
     # Patch ICU compatibility for older ICU versions
     patch_icu_compat(version)
+
+    # Patch unwinding_records.h for Windows hosts (Dart 3.8+)
+    if sys.platform == 'win32':
+        patch_unwinding_records_win(version, clone_dir)
 
     print(f"[+] Dart SDK cloned to {clone_dir}")
 
@@ -352,9 +413,8 @@ def build_dart_runtime(version, arch):
         "--log-level=NOTICE",
         f"-DCMAKE_INSTALL_PREFIX={PROJECT_DIR / 'packages'}",
         str(clone_dir),
-        "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
-        "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
     ]
+    cmake_args += _cmake_launcher_args()
 
     env = os.environ.copy()
 
@@ -418,9 +478,8 @@ def build_blutter_binary(version, arch, macros):
         f"-DDARTLIB={dart_lib}", "-DNAME_SUFFIX=",
         "-DCMAKE_BUILD_TYPE=Release", "--log-level=NOTICE",
         str(PROJECT_DIR / "blutter"),
-        "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
-        "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
     ]
+    cmake_args += _cmake_launcher_args()
 
     env = os.environ.copy()
 
@@ -440,7 +499,8 @@ def build_blutter_binary(version, arch, macros):
         output.with_suffix(".exe").rename(output)
 
     print(f"\n[+] Built: {output}")
-    subprocess.run(["file", str(output)])
+    if sys.platform != 'win32':
+        subprocess.run(["file", str(output)])
 
 
 def main():
