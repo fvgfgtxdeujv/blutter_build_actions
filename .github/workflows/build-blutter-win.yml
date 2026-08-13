@@ -6,6 +6,11 @@ on:
       dart_version:
         description: 'Dart 版本（单个，如 3.3.4）'
         required: true
+      upload_dlls:
+        description: '同时上传 Windows 运行依赖 dll 包（capstone + ICU）'
+        type: boolean
+        default: false
+        required: false
 
 permissions:
   contents: read
@@ -57,4 +62,18 @@ jobs:
         with:
           name: Blutter Windows x64 ${{ inputs.dart_version }}
           path: bin/blutter_dartvm${{ inputs.dart_version }}_android_arm64_win.exe
+          if-no-files-found: error
+
+      - name: 打包 Windows 运行依赖 dll（可选）
+        if: inputs.upload_dlls == true
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "bin/capstone.dll","bin/icuuc73.dll","bin/icudt73.dll" -DestinationPath "blutter_dartvm${{ inputs.dart_version }}_android_arm64_win_dlls.zip"
+
+      - name: 上传 dll 包
+        if: inputs.upload_dlls == true
+        uses: actions/upload-artifact@v5
+        with:
+          name: Blutter Windows x64 dlls ${{ inputs.dart_version }}
+          path: blutter_dartvm${{ inputs.dart_version }}_android_arm64_win_dlls.zip
           if-no-files-found: error
