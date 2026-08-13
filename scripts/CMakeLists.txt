@@ -26,6 +26,9 @@ string(SUBSTRING ${PROJECT_NAME} 6 -1 DART_VERSION)
 if (NOT DEFINED TARGET_OS)
 	set(TARGET_OS "android")
 endif()
+if (NOT "${TARGET_OS}" MATCHES "^(android|ios|windows|linux)$")
+	message(FATAL_ERROR "Only android, ios, windows or linux platform")
+endif()
 
 if (NOT DEFINED TARGET_ARCH)
 	set(TARGET_ARCH "arm64")
@@ -51,9 +54,11 @@ set_target_properties(${LIBNAME} PROPERTIES
 	VISIBILITY_INLINES_HIDDEN ON
 	POSITION_INDEPENDENT_CODE ON)
 
-# DART_TARGET_OS_ANDROID or DART_TARGET_OS_MACOS_IOS
+# DART_TARGET_OS_ANDROID / DART_TARGET_OS_MACOS_IOS / DART_TARGET_OS_WINDOWS
 if (${TARGET_OS} STREQUAL "android")
 	set(target_os "DART_TARGET_OS_ANDROID")
+elseif (${TARGET_OS} STREQUAL "windows")
+	set(target_os "DART_TARGET_OS_WINDOWS")
 elseif (${TARGET_OS} STREQUAL "linux")
 	set(target_os "DART_TARGET_OS_LINUX")
 else()

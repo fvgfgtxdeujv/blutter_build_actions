@@ -25,7 +25,9 @@ if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
 endif()
 
 find_package(${DARTLIB} REQUIRED PATHS "${PROJECT_SOURCE_DIR}/../packages")
-if (MSVC)
+# On Windows always use the bundled Capstone from init_env_win.py (MSVC may not be
+# set yet depending on generator/compiler detection order).
+if (WIN32 OR MSVC)
 	add_library(capstone SHARED IMPORTED)
 	set_target_properties(capstone PROPERTIES IMPORTED_LOCATION "${PROJECT_SOURCE_DIR}/../external/capstone/capstone.dll")
 	set_target_properties(capstone PROPERTIES IMPORTED_IMPLIB "${PROJECT_SOURCE_DIR}/../external/capstone/capstone_dll.lib")
@@ -40,6 +42,19 @@ endif()
 # Add source to this project's executable.
 set(SRCDIR "src")
 include(sourcelist.cmake)
+# Arch-specific sources: arm64 analyzer is upstream; x64 stubs for Windows desktop.
+if (NOT DEFINED BLUTTER_ARCH)
+	set(BLUTTER_ARCH "arm64")
+endif()
+if (${BLUTTER_ARCH} STREQUAL "x64")
+	list(FILTER SRCS EXCLUDE REGEX ".*_arm64\\.(cpp|h)$")
+	list(APPEND SRCS Disassembler_x64.cpp Disassembler_x64.h CodeAnalyzer_x64.cpp)
+elseif (${BLUTTER_ARCH} STREQUAL "arm64")
+	list(FILTER SRCS EXCLUDE REGEX ".*_x64\\.(cpp|h)$")
+else()
+	message(FATAL_ERROR "Unsupported BLUTTER_ARCH=${BLUTTER_ARCH}")
+endif()
+message(STATUS "BLUTTER_ARCH=${BLUTTER_ARCH}")
 list(TRANSFORM SRCS PREPEND "${SRCDIR}/")
 add_executable(${BINNAME} ${SRCS})
 

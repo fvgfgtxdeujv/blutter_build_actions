@@ -12,6 +12,9 @@ PRAGMA_WARNING(pop)
 DartApp::DartApp(const char* path) : ppool(NULL), nativeLib(0xdeadead), throwStubAddr(0)
 {
 	auto libInfo = ElfHelper::MapLibAppSo(path);
+	if (libInfo.lib == nullptr) {
+		throw std::runtime_error("Failed to map libapp");
+	}
 	lib_base = libInfo.lib;
 	vm_snapshot_data = libInfo.vm_snapshot_data;
 	vm_snapshot_instructions = libInfo.vm_snapshot_instructions;
@@ -20,7 +23,11 @@ DartApp::DartApp(const char* path) : ppool(NULL), nativeLib(0xdeadead), throwStu
 
 	isolate = reinterpret_cast<dart::Isolate*>(DartLoader::Load(libInfo));
 
-	heap_base_ = dart::Thread::Current()->heap_base();
+	auto* thr = dart::Thread::Current();
+	if (thr == nullptr) {
+		throw std::runtime_error("Dart Thread::Current() is null after isolate load");
+	}
+	heap_base_ = thr->heap_base();
 	inScope = false;
 
 	DartFnBase::SetLibBase(base());
@@ -512,11 +519,31 @@ void DartApp::findFunctionInHeap()
 void DartApp::finalizeFunctionsInfo()
 {
 	auto& parentFn = dart::Function::Handle();
+	const auto nullFn = (intptr_t)dart::Function::null();
+	// Temporary parent storage may hold a raw Dart FunctionPtr (tagged).
+	// Null is typically 1 — truthy as C++ pointer — so always validate before use.
+	auto resolveRawParent = [&](DartFunction* dartFn) -> bool {
+		const auto raw = (intptr_t)dartFn->parent;
+		if (raw == 0 || raw == nullFn) {
+			dartFn->parent = nullptr;
+			return false;
+		}
+		// Already resolved to a real DartFunction* (heap alloc, not a tagged ObjectPtr)
+		if ((raw & 1) == 0) {
+			return false;
+		}
+		parentFn = dart::FunctionPtr(raw);
+		if (parentFn.IsNull()) {
+			dartFn->parent = nullptr;
+			return false;
+		}
+		return true;
+	};
+
 	std::unordered_map<uint64_t, DartFunction*> pending_functions;
 	for (auto& [_, dartFn] : functions) {
 		// update parent pointer
-		if (dartFn->parent) {
-			parentFn = dart::FunctionPtr((intptr_t)dartFn->parent);
+		if (dartFn->parent && resolveRawParent(dartFn)) {
 			const auto ep_addr = parentFn.entry_point() - base();
 			if (stubs.contains(ep_addr)) {
 				dartFn->parent = nullptr;
@@ -540,8 +567,7 @@ void DartApp::finalizeFunctionsInfo()
 	std::unordered_map<uint64_t, DartFunction*> new_functions;
 	while (!pending_functions.empty()) {
 		for (auto& [dartFn_ep, dartFn] : pending_functions) {
-			if (dartFn->parent) {
-				parentFn = dart::FunctionPtr((intptr_t)dartFn->parent);
+			if (dartFn->parent && resolveRawParent(dartFn)) {
 				const auto ep_addr = parentFn.entry_point() - base();
 				if (stubs.contains(ep_addr)) {
 					dartFn->parent = nullptr;
@@ -580,6 +606,8 @@ void DartApp::finalizeFunctionsInfo()
 	// Note: Signature is dropped in most function
 	auto& func = dart::Function::Handle();
 	for (auto& [_, dartFn] : functions) {
+		if ((intptr_t)dartFn->ptr == nullFn)
+			continue;
 		func = dartFn->ptr;
 		const auto sigPtr = func.signature();
 		if (!sigPtr.IsHeapObject())

@@ -2,6 +2,8 @@
 
 基于 GitHub Actions 自动构建 [blutter](https://github.com/worawit/blutter) 二进制的仓库，支持 Linux（aarch64）与 Windows（x64）两种宿主编译环境、单版本构建与多版本批量构建。
 
+源码合并自 [1903247335/blutter-windows](https://github.com/1903247335/blutter-windows) 的 Flutter Windows (x64) 支持：除 Android arm64 快照解析（保持兼容）外，还可分析 Flutter Windows 桌面应用的 `data/app.so`（x64）。`scripts/build.py` 新增 `--arch windows_x64` 目标（Dart VM 以 `TARGET_OS=windows -DTARGET_ARCH=x64 -DCOMPRESSED_PTRS=0` 构建）。
+
 ## 产物
 
 | 文件 | 宿主平台 | 说明 |
@@ -9,6 +11,7 @@
 | `blutter_dartvm<ver>_android_arm64` | Linux aarch64 | 单版本构建产物 |
 | `blutter_dartvm<ver>_android_arm64_22` / `_24` | Linux aarch64 | 批量构建产物，按 Ubuntu 22.04 / 24.04 区分 |
 | `blutter_dartvm<ver>_android_arm64_win.exe` | Windows x64 | Windows 下解析 Android ARM64 快照 |
+| `blutter_dartvm<ver>_windows_x64`（`build.py --arch windows_x64`） | Windows x64 | 分析 Flutter Windows 桌面 `app.so`（MVP：对象池 + 汇编注释 + IDA 脚本） |
 
 可选上传内容：
 - **packages 目录**（Dart VM 头文件 + 静态库）：勾选 `Upload packages` 时打包上传（Linux 为 `.zip`，Windows 为 `_win.zip`）
@@ -48,5 +51,5 @@ Actions → **获取待构建 Dart 版本**，运行后从日志末尾复制待�
 
 ## 其他
 
-- **版本兼容**：支持 Dart 2.15+，自动处理版本兼容宏与压缩/非压缩指针
+- **版本兼容**：与官方 blutter 支持的 Dart 版本一致
 - **输出目录**：运行 blutter 后生成 `asm/`（反汇编）、`blutter_frida.js`（Frida 脚本）、`objs.txt` / `pp.txt`（Object Pool 转储）

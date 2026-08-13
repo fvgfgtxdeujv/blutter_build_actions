@@ -1,8 +1,12 @@
 #pragma once
 #include <capstone.h>
 #include <utility>
-#ifdef TARGET_ARCH_ARM64
+#if defined(TARGET_ARCH_ARM64)
 #include "Disassembler_arm64.h"
+#elif defined(TARGET_ARCH_X64)
+#include "Disassembler_x64.h"
+#else
+#error "Unsupported TARGET_ARCH for Blutter Disassembler"
 #endif
 
 
@@ -89,7 +93,7 @@ public:
 	Disassembler& operator=(const Disassembler&) = delete;
 
 	AsmInstructions Disasm(const uint8_t* code, size_t code_size, uint64_t address, size_t max_count = 0);
-	const char* GetRegName(arm64_reg reg) { return cs_reg_name(cshandle, reg); }
+	const char* GetRegName(unsigned int reg) { return cs_reg_name(cshandle, reg); }
 
 private:
 	csh cshandle;

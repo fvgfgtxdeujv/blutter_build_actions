@@ -380,8 +380,9 @@ def generate_sources(version):
 
 
 ARCH_MAP = {
-    "aarch64": {"os": "android", "arch": "arm64", "compressed_ptrs": True},
-    "x86_64":  {"os": "linux",   "arch": "x64",   "compressed_ptrs": False},
+    "aarch64":     {"os": "android", "arch": "arm64", "compressed_ptrs": True},
+    "x86_64":      {"os": "linux",   "arch": "x64",   "compressed_ptrs": False},
+    "windows_x64": {"os": "windows", "arch": "x64",   "compressed_ptrs": False},
 }
 
 
@@ -468,6 +469,7 @@ def build_blutter_binary(version, arch, macros):
     """Build blutter executable"""
     cross = is_cross_compile(arch)
     dart_lib = _dart_lib_name(version, arch)
+    blutter_arch = "x64" if arch in ("x86_64", "windows_x64") else "arm64"
     print(f"[*] Building blutter binary (arch={arch}, cross={cross})...")
     bin_name = f"blutter_{dart_lib}"
     build_path = BUILD_DIR / bin_name
@@ -476,6 +478,7 @@ def build_blutter_binary(version, arch, macros):
     cmake_args = [
         CMAKE_CMD, "-GNinja", "-B", str(build_path),
         f"-DDARTLIB={dart_lib}", "-DNAME_SUFFIX=",
+        f"-DBLUTTER_ARCH={blutter_arch}",
         "-DCMAKE_BUILD_TYPE=Release", "--log-level=NOTICE",
         str(PROJECT_DIR / "blutter"),
     ]
@@ -515,10 +518,10 @@ def main():
     p.add_argument("version")
     p = sub.add_parser("build-dartvm")
     p.add_argument("version")
-    p.add_argument("--arch", choices=["aarch64", "x86_64"], default="aarch64")
+    p.add_argument("--arch", choices=["aarch64", "x86_64", "windows_x64"], default="aarch64")
     p = sub.add_parser("build-blutter")
     p.add_argument("version")
-    p.add_argument("--arch", choices=["aarch64", "x86_64"], default="aarch64")
+    p.add_argument("--arch", choices=["aarch64", "x86_64", "windows_x64"], default="aarch64")
 
     args = parser.parse_args()
 

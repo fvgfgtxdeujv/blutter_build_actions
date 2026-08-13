@@ -34,21 +34,45 @@ using namespace dart::elf;
 #ifdef _WIN32
 static void* load_map_file(const char* path)
 {
-	HANDLE hFile = CreateFileA(path, GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	HANDLE hFile = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (hFile == INVALID_HANDLE_VALUE) {
 		printf("\nCannot find %s\n", path);
 		return NULL;
 	}
 
-	// because Dart API requires only snapshot buffer addresses (no relative access across snapshot),
-	//   so we can just mapping a whole file and find address of snapshots
-	HANDLE hMapFile = CreateFileMapping(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
-	if (hMapFile == INVALID_HANDLE_VALUE)
+	LARGE_INTEGER fileSize{};
+	if (!GetFileSizeEx(hFile, &fileSize) || fileSize.QuadPart <= 0) {
+		CloseHandle(hFile);
 		return NULL;
+	}
+	const SIZE_T size = static_cast<SIZE_T>(fileSize.QuadPart);
 
-	// need RW because dart initialization need writing data in BSS
-	void* mem = MapViewOfFile(hMapFile, FILE_MAP_COPY, 0, 0, 0);
-	CloseHandle(hMapFile);
+	// Dart AOT snapshots contain executable stub/code pages. DEP requires RX (or RWX);
+	// plain FILE_MAP_COPY is RW-only and crashes in Dart_Initialize on Windows.
+	// Also need writable BSS for snapshot init — use RWX private mapping.
+	void* mem = VirtualAlloc(NULL, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+	if (mem == NULL) {
+		CloseHandle(hFile);
+		return NULL;
+	}
+
+	DWORD read = 0;
+	SIZE_T total = 0;
+	while (total < size) {
+		const DWORD chunk = static_cast<DWORD>((std::min)(static_cast<SIZE_T>(1 << 20), size - total));
+		if (!ReadFile(hFile, static_cast<uint8_t*>(mem) + total, chunk, &read, NULL) || read == 0) {
+			VirtualFree(mem, 0, MEM_RELEASE);
+			CloseHandle(hFile);
+			return NULL;
+		}
+		total += read;
+	}
+
+	DWORD oldProt = 0;
+	if (!VirtualProtect(mem, size, PAGE_EXECUTE_READWRITE, &oldProt)) {
+		VirtualFree(mem, 0, MEM_RELEASE);
+		return NULL;
+	}
 
 	CloseHandle(hFile);
 	return mem;
@@ -150,6 +174,8 @@ LibAppInfo ElfHelper::findSnapshots(const uint8_t* elf)
 LibAppInfo ElfHelper::MapLibAppSo(const char* path)
 {
 	void* lib = load_map_file(path);
+	if (lib == nullptr)
+		throw std::runtime_error(std::string("Cannot map libapp: ") + path);
 	// quick and dirty parsing ELF to get symbol addresses
 	uint8_t* elf = (uint8_t*)(lib);
 #if defined(DART_TARGET_OS_MACOS)

@@ -37,12 +37,24 @@ public:
 
 	size_t AtIndex(uint64_t addr) {
 		ASSERT(addr >= first_addr && addr <= last_addr);
-		// TODO: below is specific to arm64
+#if defined(TARGET_ARCH_ARM64)
 		// estimate index (normally 4 bytes per instruction for arm64)
 		auto idx = (addr - first_addr) / 4;
-		while (asm_texts[idx].addr < addr)
+		while (idx < asm_texts.size() && asm_texts[idx].addr < addr)
 			++idx;
 		return idx;
+#else
+		// x64 variable-length instructions — binary search
+		size_t lo = 0, hi = asm_texts.size();
+		while (lo < hi) {
+			const auto mid = (lo + hi) / 2;
+			if (asm_texts[mid].addr < addr)
+				lo = mid + 1;
+			else
+				hi = mid;
+		}
+		return lo;
+#endif
 	}
 
 	AsmText& AtAddr(uint64_t addr) { return asm_texts[AtIndex(addr)]; }
