@@ -309,7 +309,9 @@ public:
 	std::unique_ptr<LoadValueInstr> processLoadValueInstr(AsmIterator& insn);
 	std::unique_ptr<ClosureCallInstr> processClosureCallInstr(AsmIterator& insn);
 	std::unique_ptr<MoveRegInstr> processMoveRegInstr(AsmIterator& insn);
+#ifdef DART_COMPRESSED_POINTERS
 	std::unique_ptr<DecompressPointerInstr> processDecompressPointerInstr(AsmIterator& insn);
+#endif
 	std::unique_ptr<SaveRegisterInstr> processSaveRegisterInstr(AsmIterator& insn);
 	std::unique_ptr<RestoreRegisterInstr> processLoadSavedRegisterInstr(AsmIterator& insn);
 	std::unique_ptr<InitAsyncInstr> processInitAsyncInstr(AsmIterator& insn);
@@ -360,7 +362,9 @@ static const AsmMatcherFn matcherFns[] = {
 	(AsmMatcherFn) &FunctionAnalyzer::processCallLeafRuntime,
 	(AsmMatcherFn) &FunctionAnalyzer::processObjectPoolInstr,
 	(AsmMatcherFn) &FunctionAnalyzer::processLoadValueNoObjectPoolInstr,
+#ifdef DART_COMPRESSED_POINTERS
 	(AsmMatcherFn) &FunctionAnalyzer::processDecompressPointerInstr,
+#endif
 	(AsmMatcherFn) &FunctionAnalyzer::processClosureCallInstr,
 	(AsmMatcherFn) &FunctionAnalyzer::processSaveRegisterInstr,
 	(AsmMatcherFn) &FunctionAnalyzer::processLoadSavedRegisterInstr,
@@ -520,6 +524,7 @@ std::unique_ptr<RestoreRegisterInstr> FunctionAnalyzer::processLoadSavedRegister
 	return nullptr;
 }
 
+#ifdef DART_COMPRESSED_POINTERS
 std::unique_ptr<DecompressPointerInstr> FunctionAnalyzer::processDecompressPointerInstr(AsmIterator& insn)
 {
 	// addq reg, [r14 + heap_base_offset]  (compressed pointer decompression)
@@ -533,6 +538,7 @@ std::unique_ptr<DecompressPointerInstr> FunctionAnalyzer::processDecompressPoint
 	}
 	return nullptr;
 }
+#endif
 
 std::unique_ptr<LoadValueInstr> FunctionAnalyzer::processLoadValueNoObjectPoolInstr(AsmIterator& insn)
 {
@@ -991,7 +997,6 @@ std::unique_ptr<WriteBarrierInstr> FunctionAnalyzer::processWriteBarrierInstr(As
 
 	if (!(insn.id() == X86_INS_SHR && insn.op_count() == 2 && IsX86Reg(insn.ops(0)) && insn.ops(0).reg == X86_REG_R11 && insn.ops(0).size == 4 && IsX86Imm(insn.ops(1))))
 		return nullptr;
-	const auto barrierOverlapShift = insn.ops(1).imm;
 	++insn;
 
 	if (!(insn.id() == X86_INS_AND && insn.op_count() == 2 && IsX86Reg(insn.ops(0)) && insn.ops(0).reg == X86_REG_R11 &&
