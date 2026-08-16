@@ -143,51 +143,23 @@ jobs:
           path: ${{ inputs.upload_packages && 'blutter_dartvm*.zip' || 'blutter_dartvm*' }}
           if-no-files-found: error
 
-  build-windows:
-    name: 构建 Blutter Windows x64
+  build-windows-arm64:
+    name: 构建 Blutter Windows（Android ARM64）
     if: inputs.compile_env == 'windows'
     runs-on: windows-latest
     env:
       DART_VERSION: ${{ inputs.dart_version || '3.3.4' }}
     steps:
-      - uses: actions/checkout@v5
-
-      - name: 配置 MSVC x64 编译环境
-        uses: ilammy/msvc-dev-cmd@v1
+      - name: 准备 Windows 构建环境（checkout / MSVC / 依赖 / SDK）
+        uses: ./.github/actions/prepare-windows
         with:
-          arch: x64
+          dart_version: ${{ env.DART_VERSION }}
 
-      - name: 安装构建依赖
-        shell: pwsh
-        run: |
-          python -m pip install --disable-pip-version-check -q ninja pyelftools requests
-          $scriptsDir = Join-Path (Split-Path (python -c "import sys;print(sys.executable)")) "Scripts"
-          Write-Host "Ninja dir: $scriptsDir"
-          "$scriptsDir" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
-          ninja --version
-
-      - name: 准备 Windows 第三方库（ICU + capstone）
-        run: python scripts/init_env_win.py
-
-      - name: 克隆 Dart SDK
-        run: python scripts/build.py clone-dart ${{ env.DART_VERSION }}
-
-      - name: 生成 CMake 源文件
-        run: python scripts/build.py generate-sources ${{ env.DART_VERSION }}
-
-      - name: 构建 Dart VM
+      - name: 构建 Dart VM (aarch64)
         run: python scripts/build.py build-dartvm ${{ env.DART_VERSION }} --arch aarch64
 
-      - name: 构建 blutter
+      - name: 构建 blutter (aarch64)
         run: python scripts/build.py build-blutter ${{ env.DART_VERSION }} --arch aarch64
-
-      - name: 构建 Dart VM（windows_x64，用于 Flutter Windows 桌面 app.so）
-        if: inputs.build_windows_x64 == true
-        run: python scripts/build.py build-dartvm ${{ env.DART_VERSION }} --arch windows_x64
-
-      - name: 构建 blutter（windows_x64）
-        if: inputs.build_windows_x64 == true
-        run: python scripts/build.py build-blutter ${{ env.DART_VERSION }} --arch windows_x64
 
       - name: 重命名产物为 _win 命名（直接上传 exe，运行时 dll 由 blutter.py 从仓库 build/ 目录下载）
         shell: pwsh
@@ -217,7 +189,7 @@ jobs:
         if: inputs.upload_release == false
         uses: actions/upload-artifact@v5
         with:
-          name: Blutter Windows x64 ${{ env.DART_VERSION }}
+          name: Blutter Windows x64 ${{ env.DART_VERSION }}（Android ARM64）
           path: ${{ inputs.upload_packages && 'blutter_dartvm*_win.zip' || 'bin/blutter_dartvm*.exe' }}
           if-no-files-found: error
 
@@ -233,4 +205,46 @@ jobs:
         with:
           name: Blutter Windows x64 dlls ${{ env.DART_VERSION }}
           path: blutter_dartvm${{ env.DART_VERSION }}_android_arm64_win_dlls.zip
+          if-no-files-found: error
+
+  build-windows-x64:
+    name: 构建 Blutter Windows x64（Flutter Windows app.so）
+    if: inputs.compile_env == 'windows' && inputs.build_windows_x64 == true
+    runs-on: windows-latest
+    env:
+      DART_VERSION: ${{ inputs.dart_version || '3.3.4' }}
+    steps:
+      - name: 准备 Windows 构建环境（checkout / MSVC / 依赖 / SDK）
+        uses: ./.github/actions/prepare-windows
+        with:
+          dart_version: ${{ env.DART_VERSION }}
+
+      - name: 构建 Dart VM（windows_x64，用于 Flutter Windows 桌面 app.so）
+        run: python scripts/build.py build-dartvm ${{ env.DART_VERSION }} --arch windows_x64
+
+      - name: 构建 blutter（windows_x64）
+        run: python scripts/build.py build-blutter ${{ env.DART_VERSION }} --arch windows_x64
+
+      - name: 重命名产物为 _win 命名
+        shell: pwsh
+        run: |
+          Rename-Item -Path "bin/blutter_dartvm${{ env.DART_VERSION }}_windows_x64.exe" -NewName "blutter_dartvm${{ env.DART_VERSION }}_windows_x64_win.exe"
+          Get-ChildItem bin | ForEach-Object { Write-Host $_.Name }
+
+      - name: 创建 Release
+        if: inputs.upload_release == true
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.DART_VERSION }}
+          name: blutter ${{ env.DART_VERSION }}
+          files: bin/blutter_dartvm*_windows_x64_win.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 上传构建产物
+        if: inputs.upload_release == false
+        uses: actions/upload-artifact@v5
+        with:
+          name: Blutter Windows x64 ${{ env.DART_VERSION }}（Flutter Windows）
+          path: bin/blutter_dartvm*_windows_x64_win.exe
           if-no-files-found: error
