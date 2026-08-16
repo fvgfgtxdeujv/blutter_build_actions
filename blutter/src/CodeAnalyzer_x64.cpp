@@ -15,6 +15,81 @@
 // A64::Register is an x64 register alias under the A64 namespace.
 // ============================================================================
 
+// ----------------------------------------------------------------------------
+// x64 AsmIterator over capstone x86-64 instructions
+// ----------------------------------------------------------------------------
+class AsmIterator {
+	cs_insn* insnStart;
+	cs_insn* insnEnd;
+	cs_insn* insn; // current instruction
+	cs_insn dummyInsnEnd;
+public:
+	AsmIterator(cs_insn* start, cs_insn* end) : insnStart(start), insnEnd(end), insn(insnStart) {
+		dummyInsnEnd.id = 0;
+		dummyInsnEnd.address = insnEnd->address + insnEnd->size;
+		dummyInsnEnd.size = 0;
+	}
+
+	cs_insn* Current() { return insn; }
+	void SetCurrent(cs_insn* ins) { insn = ins; }
+	// prefix increment
+	AsmIterator& operator++() {
+		ASSERT(insn != &dummyInsnEnd);
+		if (insn == insnEnd) {
+			insn = &dummyInsnEnd;
+		}
+		else {
+			++insn;
+			while (insn != insnEnd && insn->id == X86_INS_NOP) {
+				++insn;
+			}
+			if (insn == insnEnd)
+				insn = &dummyInsnEnd;
+		}
+		return *this;
+	}
+	AsmIterator& operator--() {
+		--insn;
+		return *this;
+	}
+	AddrRange Wrap(int64_t start) {
+		return AddrRange(start, insn->address);
+	}
+	bool IsEnd() {
+		return insn == &dummyInsnEnd;
+	}
+
+	// jump instructions: return the branch target (absolute) if the current
+	// instruction is a Jcc with an immediate target, else 0.
+	uint64_t BranchTarget() const {
+		if (!insn->detail || insn->detail->x86.op_count == 0)
+			return 0;
+		const auto& op = insn->detail->x86.operands[0];
+		if (op.type != X86_OP_IMM)
+			return 0;
+		return (uint64_t)op.imm;
+	}
+	bool IsJcc() const {
+		switch (insn->id) {
+		case X86_INS_JAE: case X86_INS_JBE: case X86_INS_JA: case X86_INS_JB:
+		case X86_INS_JE: case X86_INS_JNE: case X86_INS_JG: case X86_INS_JGE:
+		case X86_INS_JL: case X86_INS_JLE:
+		case X86_INS_JS: case X86_INS_JNS: case X86_INS_JO: case X86_INS_JNO:
+		case X86_INS_JP: case X86_INS_JNP:
+			return true;
+		}
+		return false;
+	}
+
+	uint64_t address() const { return insn->address; }
+	uint16_t size() const { return insn->size; }
+	uint64_t NextAddress() const { return insn->address + insn->size; }
+	unsigned int id() const { return insn->id; }
+	const cs_x86_op& ops(int i) const { return insn->detail->x86.operands[i]; }
+	uint8_t op_count() const { return insn->detail->x86.op_count; }
+	const char* mnemonic() const { return insn->mnemonic; }
+};
+
 // auto revert ASM iterator to the current when pattern does not match or an exception occurs
 class InsnMarker
 {
@@ -186,80 +261,6 @@ static VarValue* getPoolObject(DartApp& app, intptr_t offset, A64::Register dstR
 	}
 }
 
-// ----------------------------------------------------------------------------
-// x64 AsmIterator over capstone x86-64 instructions
-// ----------------------------------------------------------------------------
-class AsmIterator {
-	cs_insn* insnStart;
-	cs_insn* insnEnd;
-	cs_insn* insn; // current instruction
-	cs_insn dummyInsnEnd;
-public:
-	AsmIterator(cs_insn* start, cs_insn* end) : insnStart(start), insnEnd(end), insn(insnStart) {
-		dummyInsnEnd.id = 0;
-		dummyInsnEnd.address = insnEnd->address + insnEnd->size;
-		dummyInsnEnd.size = 0;
-	}
-
-	cs_insn* Current() { return insn; }
-	void SetCurrent(cs_insn* ins) { insn = ins; }
-	// prefix increment
-	AsmIterator& operator++() {
-		ASSERT(insn != &dummyInsnEnd);
-		if (insn == insnEnd) {
-			insn = &dummyInsnEnd;
-		}
-		else {
-			++insn;
-			while (insn != insnEnd && insn->id == X86_INS_NOP) {
-				++insn;
-			}
-			if (insn == insnEnd)
-				insn = &dummyInsnEnd;
-		}
-		return *this;
-	}
-	AsmIterator& operator--() {
-		--insn;
-		return *this;
-	}
-	AddrRange Wrap(int64_t start) {
-		return AddrRange(start, insn->address);
-	}
-	bool IsEnd() {
-		return insn == &dummyInsnEnd;
-	}
-
-	// jump instructions: return the branch target (absolute) if the current
-	// instruction is a Jcc with an immediate target, else 0.
-	uint64_t BranchTarget() const {
-		if (!insn->detail || insn->detail->x86.op_count == 0)
-			return 0;
-		const auto& op = insn->detail->x86.operands[0];
-		if (op.type != X86_OP_IMM)
-			return 0;
-		return (uint64_t)op.imm;
-	}
-	bool IsJcc() const {
-		switch (insn->id) {
-		case X86_INS_JAE: case X86_INS_JBE: case X86_INS_JA: case X86_INS_JB:
-		case X86_INS_JE: case X86_INS_JNE: case X86_INS_JG: case X86_INS_JGE:
-		case X86_INS_JL: case X86_INS_JLE: case X86_INS_JE: case X86_INS_JNE:
-		case X86_INS_JS: case X86_INS_JNS: case X86_INS_JO: case X86_INS_JNO:
-		case X86_INS_JP: case X86_INS_JNP:
-			return true;
-		}
-		return false;
-	}
-
-	uint64_t address() const { return insn->address; }
-	uint16_t size() const { return insn->size; }
-	uint64_t NextAddress() const { return insn->address + insn->size; }
-	unsigned int id() const { return insn->id; }
-	const cs_x86_op& ops(int i) const { return insn->detail->x86.operands[i]; }
-	uint8_t op_count() const { return insn->detail->x86.op_count; }
-	const char* mnemonic() const { return insn->mnemonic; }
-};
 
 // ----------------------------------------------------------------------------
 // FunctionAnalyzer
