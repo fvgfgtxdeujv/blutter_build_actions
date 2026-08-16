@@ -9,8 +9,6 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: actions/checkout@v5
-
     - name: 配置 MSVC x64 编译环境
       uses: ilammy/msvc-dev-cmd@v1
       with:
