@@ -19,6 +19,8 @@ on:
           - 'windows_windows'
           - 'ubuntu_22'
           - 'ubuntu_24'
+          - 'ubuntu_22_windows'
+          - 'ubuntu_24_windows'
 
 permissions:
   contents: write
@@ -43,10 +45,12 @@ jobs:
           VERSIONS=$(echo "$INPUT_VERSIONS" | python3 -c "import json,sys; raw=sys.stdin.read().strip().strip('[]'); vs=[v.strip() for v in raw.split(',') if v.strip()]; print(json.dumps(vs))")
           # 按构建目标确定产物命名（与单版本构建一致）
           case "$BUILD_TARGET" in
-            windows_android) SUFFIX="win"; EXT=".exe"; DART_NAME="android_arm64" ;;
-            windows_windows) SUFFIX="win"; EXT=".exe"; DART_NAME="windows_x64" ;;
-            ubuntu_22)       SUFFIX="22";  EXT="";    DART_NAME="android_arm64" ;;
-            ubuntu_24)       SUFFIX="24";  EXT="";    DART_NAME="android_arm64" ;;
+            windows_android)    SUFFIX="win"; EXT=".exe"; DART_NAME="android_arm64" ;;
+            windows_windows)    SUFFIX="win"; EXT=".exe"; DART_NAME="windows_x64" ;;
+            ubuntu_22)          SUFFIX="22";  EXT="";    DART_NAME="android_arm64" ;;
+            ubuntu_24)          SUFFIX="24";  EXT="";    DART_NAME="android_arm64" ;;
+            ubuntu_22_windows)  SUFFIX="22";  EXT="";    DART_NAME="windows_x64" ;;
+            ubuntu_24_windows)  SUFFIX="24";  EXT="";    DART_NAME="windows_x64" ;;
           esac
           echo "构建目标: $BUILD_TARGET (产物 blutter_dartvm<ver>_${DART_NAME}_${SUFFIX}${EXT})"
           mapfile -t ALL < <(echo "$VERSIONS" | python3 -c "import json,sys; print('\n'.join(json.loads(sys.stdin.read())))")
@@ -104,16 +108,16 @@ jobs:
       fail-fast: false
       matrix:
         worker: ${{ fromJson(needs.prepare.outputs.workers) }}
-    runs-on: ${{ (startsWith(inputs.build_target, 'windows_') && 'windows-latest') || (inputs.build_target == 'ubuntu_24' && 'ubuntu-24.04-arm') || 'ubuntu-22.04-arm' }}
+    runs-on: ${{ (startsWith(inputs.build_target, 'windows_') && 'windows-latest') || (inputs.build_target == 'ubuntu_24' && 'ubuntu-24.04-arm') || (inputs.build_target == 'ubuntu_22' && 'ubuntu-22.04-arm') || (inputs.build_target == 'ubuntu_24_windows' && 'ubuntu-24.04') || (inputs.build_target == 'ubuntu_22_windows' && 'ubuntu-22.04') || 'ubuntu-22.04-arm' }}
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 5G
       CCACHE_COMPILERCHECK: "none"
       CCACHE_NOHASHDIR: "true"
       CCACHE_NOHARDLINK: "true"
-      RUNNER_SUFFIX: ${{ (inputs.build_target == 'ubuntu_24' && '24') || (inputs.build_target == 'ubuntu_22' && '22') || 'win' }}
-      BUILD_ARCH: ${{ (inputs.build_target == 'windows_windows' && 'windows_x64') || 'aarch64' }}
-      DART_NAME: ${{ (inputs.build_target == 'windows_windows' && 'windows_x64') || 'android_arm64' }}
+      RUNNER_SUFFIX: ${{ (inputs.build_target == 'ubuntu_24' || inputs.build_target == 'ubuntu_24_windows') && '24' || (inputs.build_target == 'ubuntu_22' || inputs.build_target == 'ubuntu_22_windows') && '22' || 'win' }}
+      BUILD_ARCH: ${{ (inputs.build_target == 'windows_windows' && 'windows_x64') || (inputs.build_target == 'ubuntu_22_windows' || inputs.build_target == 'ubuntu_24_windows') && 'x86_64' || 'aarch64' }}
+      DART_NAME: ${{ (inputs.build_target == 'windows_windows' || inputs.build_target == 'ubuntu_22_windows' || inputs.build_target == 'ubuntu_24_windows') && 'windows_x64' || 'android_arm64' }}
       GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
       GITEE_TARGET_REPO: qeruiop_admin/blutter_build_actions
     steps:
@@ -152,7 +156,7 @@ jobs:
             cmake ninja-build git curl unzip jq \
             python3 python3-pip python3-pyelftools python3-requests \
             libcapstone-dev libicu-dev ccache
-          if [ "${{ inputs.build_target }}" = "ubuntu_22" ]; then
+          if [ "${{ startsWith(inputs.build_target, 'ubuntu_22') }}" = "true" ]; then
             echo "==> Ubuntu 22.04: 安装 gcc-13 / g++-13（提供 libstdc++-13，支持 std::format）"
             sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
             sudo apt-get update -qq
@@ -250,6 +254,13 @@ jobs:
           PLATFORM="${{ startsWith(inputs.build_target, 'windows_') && 'windows' || 'linux' }}"
           GITEE_PIDS=()
           if [ "$PLATFORM" = "windows" ]; then PY=python; EXT=".exe"; else PY=python3; EXT=""; fi
+          # build.py 产物源文件名：aarch64→android_arm64、windows_x64→windows_x64、x86_64→linux_x64
+          case "$BUILD_ARCH" in
+            aarch64)      SRC_NAME="android_arm64" ;;
+            windows_x64)  SRC_NAME="windows_x64" ;;
+            x86_64)       SRC_NAME="linux_x64" ;;
+            *)            echo "错误：未知 BUILD_ARCH=$BUILD_ARCH"; exit 1 ;;
+          esac
 
           # Windows 依赖（ICU + capstone）仅准备一次，后续版本复用
           if [ "$PLATFORM" = "windows" ]; then
@@ -264,7 +275,7 @@ jobs:
                && $PY scripts/build.py generate-sources "$ver" \
                && $PY scripts/build.py build-dartvm "$ver" --arch "$BUILD_ARCH" \
                && $PY scripts/build.py build-blutter "$ver" --arch "$BUILD_ARCH"; then
-              mv "bin/blutter_dartvm${ver}_${DART_NAME}${EXT}" "bin/$asset"
+              mv "bin/blutter_dartvm${ver}_${SRC_NAME}${EXT}" "bin/$asset"
               bin_file="bin/$asset"
               echo "===== 发布 $ver ($bin_file) ====="
               if gh release create "$ver" "$bin_file" --title "blutter $ver" 2>/dev/null; then

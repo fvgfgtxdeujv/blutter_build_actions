@@ -18,6 +18,8 @@ on:
           - 'windows_windows'
           - 'ubuntu_22'
           - 'ubuntu_24'
+          - 'ubuntu_22_windows'
+          - 'ubuntu_24_windows'
       upload_packages:
         description: '上传 packages 目录（Dart VM 头文件和静态库）'
         type: boolean
@@ -136,6 +138,112 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: Blutter 构建产物 ${{ env.DART_VERSION }}（Android ARM64 ${{ env.RUNNER_SUFFIX }}）
+          path: ${{ inputs.upload_packages && 'blutter_dartvm*.zip' || 'blutter_dartvm*' }}
+          if-no-files-found: error
+
+  build-linux-x64:
+    name: 构建并发布（Linux 解析 Windows）
+    if: inputs.build_target == 'ubuntu_22_windows' || inputs.build_target == 'ubuntu_24_windows'
+    runs-on: ${{ (inputs.build_target == 'ubuntu_24_windows' && 'ubuntu-24.04') || 'ubuntu-22.04' }}
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 5G
+      CCACHE_COMPILERCHECK: "none"
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_NOHARDLINK: "true"
+      DART_VERSION: ${{ inputs.dart_version || '3.3.4' }}
+      RUNNER_SUFFIX: ${{ (inputs.build_target == 'ubuntu_24_windows' && '24') || '22' }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: 恢复 Dart SDK 缓存
+        id: cache-dartsdk
+        uses: actions/cache@v5
+        with:
+          path: dartsdk/
+          key: dartsdk-${{ env.DART_VERSION }}
+          restore-keys: dartsdk-${{ env.DART_VERSION }}_
+
+      - name: 恢复 CCache 缓存
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ env.DART_VERSION }}
+          restore-keys: ccache-${{ env.DART_VERSION }}-
+
+      - name: 安装依赖
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            software-properties-common \
+            cmake ninja-build git curl unzip \
+            python3 python3-pip python3-pyelftools python3-requests \
+            libcapstone-dev libicu-dev ccache
+          if [ "${{ env.RUNNER_SUFFIX }}" = "22" ]; then
+            echo "==> Ubuntu 22.04: 安装 gcc-13 / g++-13（提供 libstdc++-13，支持 std::format）"
+            sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends gcc-13 g++-13
+            sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100
+            sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 100
+          else
+            echo "==> Ubuntu 24.04: 使用系统默认 gcc-13"
+          fi
+          gcc --version | head -1
+          g++ --version | head -1
+
+      - name: 初始化 CCache
+        run: |
+          mkdir -p "${{ env.CCACHE_DIR }}"
+          ccache -M ${{ env.CCACHE_MAXSIZE }}
+          ccache -s
+
+      - name: 克隆 Dart SDK
+        run: python3 scripts/build.py clone-dart "${{ env.DART_VERSION }}"
+
+      - name: 生成 CMake 源文件
+        run: python3 scripts/build.py generate-sources "${{ env.DART_VERSION }}"
+
+      - name: 构建 Dart VM（x86_64，用于解析 Flutter Windows 桌面 app.so）
+        run: python3 scripts/build.py build-dartvm "${{ env.DART_VERSION }}" --arch x86_64
+
+      - name: 构建 blutter（x86_64）
+        run: python3 scripts/build.py build-blutter "${{ env.DART_VERSION }}" --arch x86_64
+
+      - name: 重命名产物为 windows_x64_<suffix> 命名
+        run: |
+          mv "bin/blutter_dartvm${{ env.DART_VERSION }}_linux_x64" "bin/blutter_dartvm${{ env.DART_VERSION }}_windows_x64_${{ env.RUNNER_SUFFIX }}"
+          ls -la bin/
+
+      - name: 打包上传 packages (可选)
+        if: inputs.upload_packages == true
+        run: |
+          mv "bin/blutter_dartvm${{ env.DART_VERSION }}_windows_x64_${{ env.RUNNER_SUFFIX }}" "bin/blutter_dartvm${{ env.DART_VERSION }}_windows_x64_${{ env.RUNNER_SUFFIX }}"
+          zip -r "blutter_dartvm${{ env.DART_VERSION }}_windows_x64_${{ env.RUNNER_SUFFIX }}.zip" bin packages
+
+          echo "打包完成:"
+          unzip -l "blutter_dartvm${{ env.DART_VERSION }}_windows_x64_${{ env.RUNNER_SUFFIX }}.zip"
+
+      - name: 上传单个二进制 (不打包)
+        if: inputs.upload_packages == false
+        run: |
+          mv "bin/blutter_dartvm${{ env.DART_VERSION }}_windows_x64_${{ env.RUNNER_SUFFIX }}" "blutter_dartvm${{ env.DART_VERSION }}_windows_x64_${{ env.RUNNER_SUFFIX }}"
+
+      - name: 创建 Release
+        if: inputs.upload_release == true
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.DART_VERSION }}
+          name: blutter ${{ env.DART_VERSION }}
+          files: ${{ inputs.upload_packages && 'blutter_dartvm*.zip' || 'blutter_dartvm*' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 上传构建产物
+        if: inputs.upload_release == false
+        uses: actions/upload-artifact@v5
+        with:
+          name: Blutter 构建产物 ${{ env.DART_VERSION }}（Windows x64 ${{ env.RUNNER_SUFFIX }}）
           path: ${{ inputs.upload_packages && 'blutter_dartvm*.zip' || 'blutter_dartvm*' }}
           if-no-files-found: error
 
