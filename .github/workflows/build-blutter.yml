@@ -1,5 +1,7 @@
 name: 构建 Blutter（单版本）
 
+run-name: 构建 Blutter ${{ inputs.dart_version }}（${{ inputs.build_target }}）
+
 on:
   workflow_dispatch:
     inputs:
@@ -37,7 +39,7 @@ permissions:
 
 jobs:
   build-linux:
-    name: 构建并发布（解析安卓 ${{ (inputs.build_target == 'ubuntu_24' && '24.04') || '22.04' }}）
+    name: 构建并发布（解析安卓 Linux）
     if: inputs.build_target == 'ubuntu_22' || inputs.build_target == 'ubuntu_24'
     runs-on: ${{ (inputs.build_target == 'ubuntu_24' && 'ubuntu-24.04-arm') || 'ubuntu-22.04-arm' }}
     env:

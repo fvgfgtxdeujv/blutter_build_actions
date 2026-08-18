@@ -1,5 +1,7 @@
 name: 批量构建 Blutter 并同步到 Gitee
 
+run-name: 批量构建 ${{ inputs.build_target }} ${{ inputs.dart_versions }}
+
 on:
   workflow_dispatch:
     inputs:
@@ -95,7 +97,7 @@ jobs:
           echo "过滤并排序后待构建版本: $VERSIONS"
 
   build:
-    name: 构建 Worker ${{ matrix.worker }}（${{ inputs.build_target }}）
+    name: 构建 Worker
     needs: prepare
     if: needs.prepare.outputs.versions != '[]'
     strategy:
