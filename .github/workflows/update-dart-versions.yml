@@ -22,12 +22,32 @@ jobs:
           # 过滤低于 2.15 的版本（blutter 不支持）
           awk -F. '$1 > 2 || ($1 == 2 && $2 >= 15)' /tmp/all_versions.txt > /tmp/filtered.txt
 
-          # 获取仓库已有 Release 的 tag（用于排除已完成版本）
-          gh release list --limit 1000 --json tagName -q '.[].tagName' > /tmp/existing.txt 2>/dev/null || true
+          # 获取仓库已有 Release 的 tag（GitHub API 分页拉取全部，不依赖 gh CLI；
+          # 避免 gh 失败被 2>/dev/null || true 吞掉后 existing.txt 为空导致无法排除）
+          page=1
+          : > /tmp/existing.txt
+          while :; do
+            RESP=$(curl -s -m 60 -H "Authorization: Bearer $GITHUB_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases?per_page=100&page=${page}")
+            if ! echo "$RESP" | jq -e 'type == "array"' > /dev/null 2>&1; then
+              echo "错误：GitHub API 响应异常，无法获取 Release 列表：" >&2
+              echo "$RESP" | jq -r '.message // .' >&2
+              exit 1
+            fi
+            COUNT=$(echo "$RESP" | jq 'length')
+            if [ "$COUNT" -eq 0 ]; then
+              break
+            fi
+            echo "$RESP" | jq -r '.[].tag_name' >> /tmp/existing.txt
+            page=$((page + 1))
+          done
+          echo "已有 Release 数: $(wc -l < /tmp/existing.txt)"
 
-          # 计算待构建版本（排除已发布的）
-          sort /tmp/filtered.txt -o /tmp/filtered.txt
-          sort /tmp/existing.txt -o /tmp/existing.txt
+          # 计算待构建版本（排除已发布的）；sort -V 按版本号而非字典序排序，
+          # 保证输出形如 3.2.0 → 3.10.0 → 3.13.0 的正确升序
+          sort -V /tmp/filtered.txt -o /tmp/filtered.txt
+          sort -V /tmp/existing.txt -o /tmp/existing.txt
           comm -23 /tmp/filtered.txt /tmp/existing.txt > /tmp/todo.txt
 
           # 转为 JSON 数组

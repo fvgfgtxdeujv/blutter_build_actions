@@ -47,6 +47,29 @@ jobs:
           if [ "$COMPILE_ENV" = "windows" ]; then SUFFIX="win"; elif [ "$COMPILE_ENV" = "22.04" ]; then SUFFIX="22"; else SUFFIX="24"; fi
           echo "编译环境: $COMPILE_ENV (后缀 _$SUFFIX)"
           mapfile -t ALL < <(echo "$VERSIONS" | python3 -c "import json,sys; print('\n'.join(json.loads(sys.stdin.read())))")
+          # 拉取仓库全部 Release 资产映射（每行 "tag|asset_name"），不依赖 gh CLI。
+          # 原因：gh release view 对不存在的 release 返回非零退出码，在 Actions 默认
+          # set -e 下会直接中止整个 job（且 stderr 被 2>/dev/null 吞掉，错误不可见）。
+          page=1
+          : > /tmp/releases.txt
+          while :; do
+            RESP=$(curl -s -m 60 -H "Authorization: Bearer $GITHUB_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases?per_page=100&page=${page}")
+            if ! echo "$RESP" | jq -e 'type == "array"' > /dev/null 2>&1; then
+              echo "错误：GitHub API 响应异常，无法获取 Release 资产列表：" >&2
+              echo "$RESP" | jq -r '.message // .' >&2
+              exit 1
+            fi
+            COUNT=$(echo "$RESP" | jq 'length')
+            if [ "$COUNT" -eq 0 ]; then
+              break
+            fi
+            echo "$RESP" | jq -r '.[] | .tag_name as $t | .assets[]? | "\($t)|\(.name)"' >> /tmp/releases.txt
+            page=$((page + 1))
+          done
+          echo "已获取 $(wc -l < /tmp/releases.txt) 条 Release 资产记录"
+
           # 主 worker 先检查每个版本：本环境产物已存在则从编译列表排除
           FILTERED=()
           for ver in "${ALL[@]}"; do
@@ -61,11 +84,10 @@ jobs:
               asset="blutter_dartvm${ver}_android_arm64_${SUFFIX}"
               asset2=""
             fi
-            ASSETS=$(gh release view "$ver" --json assets --jq '.assets[].name' 2>/dev/null)
             MISSING=()
-            echo "$ASSETS" | grep -qx "$asset" || MISSING+=("$asset")
+            grep -Fqx "${ver}|${asset}" /tmp/releases.txt || MISSING+=("$asset")
             if [ -n "$asset2" ]; then
-              echo "$ASSETS" | grep -qx "$asset2" || MISSING+=("$asset2")
+              grep -Fqx "${ver}|${asset2}" /tmp/releases.txt || MISSING+=("$asset2")
             fi
             if [ ${#MISSING[@]} -eq 0 ]; then
               echo "排除（已有全部产物）: $ver"
