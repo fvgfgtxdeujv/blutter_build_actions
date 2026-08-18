@@ -8,10 +8,9 @@
 
 | 文件 | 宿主平台 | 说明 |
 |------|---------|------|
-| `blutter_dartvm<ver>_android_arm64` | Linux aarch64 | 单版本构建产物 |
-| `blutter_dartvm<ver>_android_arm64_22` / `_24` | Linux aarch64 | 批量构建产物，按 Ubuntu 22.04 / 24.04 区分 |
+| `blutter_dartvm<ver>_android_arm64_22` / `_24` | Linux aarch64 | 解析安卓，按 Ubuntu 22.04 / 24.04 区分（单版本与批量构建产物命名一致） |
 | `blutter_dartvm<ver>_android_arm64_win.exe` | Windows x64 | Windows 下解析 Android ARM64 快照 |
-| `blutter_dartvm<ver>_windows_x64.exe` | Windows x64 | Windows 下分析 Flutter Windows 桌面 `app.so`（MVP：对象池 + 汇编注释 + IDA 脚本），由 Windows workflow 一并构建 |
+| `blutter_dartvm<ver>_windows_x64_win.exe` | Windows x64 | Windows 下分析 Flutter Windows 桌面 `app.so`（MVP：对象池 + 汇编注释 + IDA 脚本） |
 
 可选上传内容：
 - **packages 目录**（Dart VM 头文件 + 静态库）：勾选 `Upload packages` 时打包上传（Linux 为 `.zip`，Windows 为 `_win.zip`）
@@ -24,13 +23,16 @@
 Actions → **构建 Blutter（单版本）** → Run workflow。参数：
 
 - **Dart version**：单个版本，如 `3.3.4`
-- **编译环境**：`windows` / `22.04` / `24.04`，默认 `22.04`（与手机 Droidspaces 环境一致）
-- **Upload packages / Upload release / Upload dlls**：均为可选项；Release 默认不上传，勾选后产物才进入 Release，否则仅以 Actions Artifacts 形式提供（dll 始终只进 Artifacts）
-- **Build Windows x64**（可选，默认关闭）：勾选后 Windows 环境额外构建 `blutter_dartvm<ver>_windows_x64.exe`（分析 Flutter Windows 桌面 `app.so`），并随 Release/Artifacts 一并上传
+- **构建目标**（四选一，默认 `ubuntu_22`）：
+  - `windows_android`：Windows 解析安卓，产出 `blutter_dartvm<ver>_android_arm64_win.exe`
+  - `windows_windows`：Windows 解析 Windows（Flutter Windows 桌面 `app.so`），产出 `blutter_dartvm<ver>_windows_x64_win.exe`
+  - `ubuntu_22`：解析安卓（Ubuntu 22.04，与手机 Droidspaces 环境一致），产出 `blutter_dartvm<ver>_android_arm64_22`
+  - `ubuntu_24`：解析安卓（Ubuntu 24.04），产出 `blutter_dartvm<ver>_android_arm64_24`
+- **Upload packages / Upload release / Upload dlls**：均为可选项；Release 默认不上传，勾选后产物才进入 Release，否则仅以 Actions Artifacts 形式提供（dll 仅 `windows_android` 目标生效，始终只进 Artifacts）
 
 ### 2. 批量构建
 
-Actions → **批量构建 Blutter** → Run workflow。参数：**Dart versions**（逗号分隔版本列表）+ **编译环境** + **Build Windows x64**（可选，默认关闭，勾选后 Windows 批量构建额外产出 windows_x64 二进制）。一次处理多个版本，分割成最多 20 个 worker 并行构建，并支持增量补齐：某版本该环境产物已存在则自动跳过，缺失才构建发布。产物同时上传 GitHub Release 并后台同步到 Gitee 镜像，不同环境的产物可并存于同一 Release。
+Actions → **批量构建 Blutter** → Run workflow。参数：**Dart versions**（逗号分隔版本列表）+ **构建目标**（四选一，与单版本构建一致：`windows_android` / `windows_windows` / `ubuntu_22` / `ubuntu_24`）。一次处理多个版本，分割成最多 20 个 worker 并行构建，并支持增量补齐：某版本该目标产物已存在则自动跳过，缺失才构建发布。产物同时上传 GitHub Release 并后台同步到 Gitee 镜像，不同目标的产物可并存于同一 Release。
 
 ### 3. 获取待构建版本
 
@@ -40,15 +42,16 @@ Actions → **获取待构建 Dart 版本**，运行后从日志末尾复制待�
 
 精简运行包，解压后运行 `python3 blutter.py <apk或lib目录> <输出目录>`。自动检测 Dart 版本并从仓库 Releases 下载匹配二进制（Linux 自动识别 `_22`/`_24`，Windows 下载 `_win.exe`）；Windows 下首次运行自动补齐三个运行 dll。下载源按国内/国外自动选择（Gitee 镜像 / GitHub 双源，失败自动切换），也可手动下载二进制放入 `$HOME/blutter/bin/`。
 
-## 构建环境
+## 构建目标
 
 | 选项 | runner | 特点 |
 |------|--------|------|
-| `22.04`（默认） | `ubuntu-22.04-arm` | 与 Droidspaces 环境一致，自动装 gcc-13 |
-| `24.04` | `ubuntu-24.04-arm` | 系统自带 gcc-13 |
-| `windows` | `windows-latest` | MSVC x64，ICU + capstone win64 自动下载 |
+| `windows_android` | `windows-latest` | MSVC x64，解析安卓，产出 `_android_arm64_win.exe`（ICU + capstone win64 自动下载） |
+| `windows_windows` | `windows-latest` | MSVC x64，分析 Flutter Windows 桌面 `app.so`，产出 `_windows_x64_win.exe`（仅 Windows runner 可构建） |
+| `ubuntu_22`（默认） | `ubuntu-22.04-arm` | 与 Droidspaces 环境一致，自动装 gcc-13 |
+| `ubuntu_24` | `ubuntu-24.04-arm` | 系统自带 gcc-13 |
 
-建议 Linux 默认 `22.04`，产物动态库版本与运行环境直接匹配。
+建议 Linux 默认 `ubuntu_22`，产物动态库版本与运行环境直接匹配。
 
 ## 其他
 
