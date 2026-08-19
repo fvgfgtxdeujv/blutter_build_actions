@@ -53,9 +53,13 @@ int main(int argc, char** argv)
 		dumper.DumpCode((outDir / "asm").string().c_str());
 		dumper.Dump4Ida(outDir / "ida_script");
 
+#ifndef NO_FRIDA
+		// Frida 脚本用于 Android 手机端 hook 运行中的 Flutter 应用；
+		// 解析 Windows 桌面 app.so（x64 目标）时无需生成（NO_FRIDA 由构建脚本按目标设置）
 		std::cout << "Generating Frida script\n";
 		FridaWriter fwriter{ app };
 		fwriter.Create((outDir / "blutter_frida.js").string().c_str());
+#endif
 
 		app.ExitScope();
 	}

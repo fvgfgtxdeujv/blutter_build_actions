@@ -493,6 +493,10 @@ def build_blutter_binary(version, arch, macros):
 
     cmake_args.extend(macros)
 
+    # 解析 Windows 桌面 app.so 的目标（x64）无需生成 Frida 脚本（Android 端 hook 用）
+    if blutter_arch == "x64":
+        cmake_args.append("-DNO_FRIDA=1")
+
     run(cmake_args, env=env)
     run([NINJA_CMD], cwd=build_path, env=env)
     run([CMAKE_CMD, "--install", "."], cwd=build_path, env=env)

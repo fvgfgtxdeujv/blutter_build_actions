@@ -61,4 +61,4 @@ Actions → **获取待构建 Dart 版本**，运行后从日志末尾复制待�
 ## 其他
 
 - **版本兼容**：与官方 blutter 支持的 Dart 版本一致
-- **输出目录**：运行 blutter 后生成 `asm/`（反汇编）、`blutter_frida.js`（Frida 脚本）、`objs.txt` / `pp.txt`（Object Pool 转储）
+- **输出目录**：运行 blutter 后生成 `asm/`（反汇编）、`objs.txt` / `pp.txt`（Object Pool 转储）；`blutter_frida.js`（Frida 脚本，Android 手机端 hook 用）仅解析安卓的目标生成，解析 Windows 桌面 `app.so` 的目标不生成
