@@ -44,3 +44,12 @@ Entries discovered by the Agent during task execution should follow this format:
   - 若目标 Gitee 仓库没有源码历史（只有初始 commit），创建 tag 时 refs 只能传该仓库已存在的 ref（如 master），不能传 GitHub 仓库的 commit sha。
   - Gitee API v5 没有删除 tag 的接口（DELETE /repos/{owner}/{repo}/tags/{tag} 在 nginx 层返回 404，swagger 264 个接口中 tags 仅 GET/POST）。删除 tag 只能通过 git push --delete refs/tags/{tag} 或网页操作。
   - Gitee API 的写操作（POST/PUT/DELETE/PATCH）在路由匹配之前有全局登录中间件，未登录时任意路径都返回 401 登录失效；因此无法用无 token 请求探测写接口是否存在，需用 GET 公开接口或 swagger spec 确认。
+
+[Project Knowledge Summary]
+- Date: 2026-08-19
+- Context: Discovered by Agent while adding ubuntu_22_windows / ubuntu_24_windows build targets to workflows
+- Category: Workflow & Collaboration
+- Instructions:
+  - GitHub Actions 的 jobs.<job_id>.name 不支持表达式求值（${{ }} 会原样显示在 UI），本项目约定 job name 一律静态化，动态信息（构建目标等）通过 workflow 级 run-name 展示。
+  - 判断产物源文件名时以 scripts/build.py 的 _arch_suffix 为准：aarch64→android_arm64、windows_x64→windows_x64、x86_64→linux_x64（x86_64 在 x64 宿主为非交叉编译，产物不带头文件后缀）。
+  - 定制版 blutter.py 的下载 base 必须与解析目标一致（blutter_dartvm<ver>_{os_name}_{arch}），曾因硬编码 android_arm64 导致 windows_x64 产物无法自动下载。
