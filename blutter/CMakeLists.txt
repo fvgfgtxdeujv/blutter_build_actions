@@ -125,6 +125,20 @@ endif()
 if (UNIFORM_INTEGER_ACCESS)
 	set(defines ${defines} UNIFORM_INTEGER_ACCESS)
 endif()
+# 解析架构宏（TARGET_ARCH_*）只应由 BLUTTER_ARCH 决定：dartvm 库按产物架构编译，
+# 其 PUBLIC 宏（如 arm64 产物传出的 TARGET_ARCH_ARM64）会经 find_package 传导到本
+# target，与解析架构冲突（Disassembler.h / DartDumper.cpp / CodeAnalyzer.h 均按
+# TARGET_ARCH_* 选择 x64/arm64 分支）。因此 BLUTTER_ARCH=x64 时屏蔽 arm64 宏并声明
+# x64 宏；MSVC 下 TARGET_ARCH_X64 已由 x64 编译的 dartvm 库提供，无需重复定义。
+if (${BLUTTER_ARCH} STREQUAL "x64")
+	if (MSVC)
+		target_compile_options(${BINNAME} PRIVATE "/UTARGET_ARCH_ARM64")
+	else()
+		target_compile_options(${BINNAME} PRIVATE -UTARGET_ARCH_ARM64)
+		target_compile_definitions(${BINNAME} PRIVATE TARGET_ARCH_X64)
+	endif()
+endif()
+
 target_compile_definitions(${BINNAME} PRIVATE ${defines})
 
 target_compile_options(${BINNAME} PRIVATE ${cc_opts})
