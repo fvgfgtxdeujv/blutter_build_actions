@@ -51,5 +51,7 @@ Entries discovered by the Agent during task execution should follow this format:
 - Category: Workflow & Collaboration
 - Instructions:
   - GitHub Actions 的 jobs.<job_id>.name 不支持表达式求值（${{ }} 会原样显示在 UI），本项目约定 job name 一律静态化，动态信息（构建目标等）通过 workflow 级 run-name 展示。
-  - 判断产物源文件名时以 scripts/build.py 的 _arch_suffix 为准：aarch64→android_arm64、windows_x64→windows_x64、x86_64→linux_x64（x86_64 在 x64 宿主为非交叉编译，产物不带头文件后缀）。
+  - 判断产物源文件名时以 scripts/build.py 的 _arch_suffix 为准：aarch64→android_arm64、windows_x64→windows_x64、x86_64→linux_x64、aarch64_windows→linux_arm64（x86_64 在 x64 宿主为非交叉编译，产物不带头文件后缀）。
   - 定制版 blutter.py 的下载 base 必须与解析目标一致（blutter_dartvm<ver>_{os_name}_{arch}），曾因硬编码 android_arm64 导致 windows_x64 产物无法自动下载。
+  - build.py 的 arch 目标拆为「产物架构（os/arch）」与「解析架构（blutter_arch，决定编哪套 CodeAnalyzer/Disassembler）」两维：aarch64_windows = linux/arm64 产物 + 解析 x64 + 非压缩指针；blutter_arch=x64 时 CMake 传 -DNO_FRIDA=1（不生成 frida.js）。
+  - ubuntu_*_windows 目标在 ARM64 runner（ubuntu-*-arm）上原生构建，产物是 aarch64 可执行文件，mv 为 _windows_x64_<suffix> 命名；Dart VM 库 linux/arm64 + COMPRESSED_PTRS=0 的布局与 x64 非压缩一致（64 位小端），可解析 Windows x64 snapshot。

@@ -1,8 +1,8 @@
 # Blutter 构建工作流
 
-基于 GitHub Actions 自动构建 [blutter](https://github.com/worawit/blutter) 二进制的仓库，支持 Linux（aarch64 / x64）与 Windows（x64）三种宿主编译环境、单版本构建与多版本批量构建。
+基于 GitHub Actions 自动构建 [blutter](https://github.com/worawit/blutter) 二进制的仓库，支持 Linux（aarch64）与 Windows（x64）两类宿主编译环境、单版本构建与多版本批量构建。
 
-源码合并自 [1903247335/blutter-windows](https://github.com/1903247335/blutter-windows) 的 Flutter Windows (x64) 支持：除 Android arm64 快照解析（保持兼容）外，还可分析 Flutter Windows 桌面应用的 `data/app.so`（x64）。`scripts/build.py` 新增 `--arch windows_x64` 目标（Dart VM 以 `TARGET_OS=windows -DTARGET_ARCH=x64 -DCOMPRESSED_PTRS=0` 构建）。
+源码合并自 [1903247335/blutter-windows](https://github.com/1903247335/blutter-windows) 的 Flutter Windows (x64) 支持：除 Android arm64 快照解析（保持兼容）外，还可分析 Flutter Windows 桌面应用的 `data/app.so`（x64）。`scripts/build.py` 的目标拆分为「产物架构」与「解析架构」两维：`--arch windows_x64`（Windows 宿主解析 x64）、`--arch aarch64_windows`（ARM64 Linux 宿主解析 x64，Dart VM 以 `TARGET_OS=linux -DTARGET_ARCH=arm64 -DCOMPRESSED_PTRS=0` 构建）。
 
 ## 产物
 
@@ -11,7 +11,7 @@
 | `blutter_dartvm<ver>_android_arm64_22` / `_24` | Linux aarch64 | 解析安卓，按 Ubuntu 22.04 / 24.04 区分（单版本与批量构建产物命名一致） |
 | `blutter_dartvm<ver>_android_arm64_win.exe` | Windows x64 | Windows 下解析 Android ARM64 快照 |
 | `blutter_dartvm<ver>_windows_x64_win.exe` | Windows x64 | Windows 下分析 Flutter Windows 桌面 `app.so`（MVP：对象池 + 汇编注释 + IDA 脚本） |
-| `blutter_dartvm<ver>_windows_x64_22` / `_24` | Linux x64 | Linux 下分析 Flutter Windows 桌面 `app.so`，按 Ubuntu 22.04 / 24.04 区分（Linux x64 宿主原生编译，无需交叉工具链） |
+| `blutter_dartvm<ver>_windows_x64_22` / `_24` | Linux aarch64 | ARM 下分析 Flutter Windows 桌面 `app.so`，按 Ubuntu 22.04 / 24.04 区分（ARM64 宿主原生编译 aarch64 产物，解析逻辑仍为 x64） |
 
 可选上传内容：
 - **packages 目录**（Dart VM 头文件 + 静态库）：勾选 `Upload packages` 时打包上传（Linux 为 `.zip`，Windows 为 `_win.zip`）
@@ -29,8 +29,8 @@ Actions → **构建 Blutter（单版本）** → Run workflow。参数：
   - `windows_windows`：Windows 解析 Windows（Flutter Windows 桌面 `app.so`），产出 `blutter_dartvm<ver>_windows_x64_win.exe`
   - `ubuntu_22`：解析安卓（Ubuntu 22.04，与手机 Droidspaces 环境一致），产出 `blutter_dartvm<ver>_android_arm64_22`
   - `ubuntu_24`：解析安卓（Ubuntu 24.04），产出 `blutter_dartvm<ver>_android_arm64_24`
-  - `ubuntu_22_windows`：Linux 解析 Windows（Ubuntu 22.04 x64 宿主），产出 `blutter_dartvm<ver>_windows_x64_22`
-  - `ubuntu_24_windows`：Linux 解析 Windows（Ubuntu 24.04 x64 宿主），产出 `blutter_dartvm<ver>_windows_x64_24`
+  - `ubuntu_22_windows`：ARM 解析 Windows（Ubuntu 22.04 aarch64 宿主），产出 `blutter_dartvm<ver>_windows_x64_22`
+  - `ubuntu_24_windows`：ARM 解析 Windows（Ubuntu 24.04 aarch64 宿主），产出 `blutter_dartvm<ver>_windows_x64_24`
 - **Upload packages / Upload release / Upload dlls**：均为可选项；Release 默认不上传，勾选后产物才进入 Release，否则仅以 Actions Artifacts 形式提供（dll 仅 `windows_android` 目标生效，始终只进 Artifacts）
 
 ### 2. 批量构建
@@ -53,8 +53,8 @@ Actions → **获取待构建 Dart 版本**，运行后从日志末尾复制待�
 | `windows_windows` | `windows-latest` | MSVC x64，分析 Flutter Windows 桌面 `app.so`，产出 `_windows_x64_win.exe`（仅 Windows runner 可构建） |
 | `ubuntu_22`（默认） | `ubuntu-22.04-arm` | 与 Droidspaces 环境一致，自动装 gcc-13 |
 | `ubuntu_24` | `ubuntu-24.04-arm` | 系统自带 gcc-13 |
-| `ubuntu_22_windows` | `ubuntu-22.04` | Linux x64 宿主原生编译 x86_64，分析 Flutter Windows 桌面 `app.so`，产出 `_windows_x64_22`（自动装 gcc-13） |
-| `ubuntu_24_windows` | `ubuntu-24.04` | Linux x64 宿主原生编译 x86_64，产出 `_windows_x64_24`（系统自带 gcc-13） |
+| `ubuntu_22_windows` | `ubuntu-22.04-arm` | ARM64 宿主原生编译 aarch64，解析逻辑 x64，分析 Flutter Windows 桌面 `app.so`，产出 `_windows_x64_22`（自动装 gcc-13） |
+| `ubuntu_24_windows` | `ubuntu-24.04-arm` | ARM64 宿主原生编译 aarch64，解析逻辑 x64，产出 `_windows_x64_24`（系统自带 gcc-13） |
 
 建议 Linux 默认 `ubuntu_22`，产物动态库版本与运行环境直接匹配。
 

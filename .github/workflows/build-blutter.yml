@@ -141,10 +141,10 @@ jobs:
           path: ${{ inputs.upload_packages && 'blutter_dartvm*.zip' || 'blutter_dartvm*' }}
           if-no-files-found: error
 
-  build-linux-x64:
-    name: 构建并发布（Linux 解析 Windows）
+  build-arm64-windows:
+    name: 构建并发布（ARM64 解析 Windows）
     if: inputs.build_target == 'ubuntu_22_windows' || inputs.build_target == 'ubuntu_24_windows'
-    runs-on: ${{ (inputs.build_target == 'ubuntu_24_windows' && 'ubuntu-24.04') || 'ubuntu-22.04' }}
+    runs-on: ${{ (inputs.build_target == 'ubuntu_24_windows' && 'ubuntu-24.04-arm') || 'ubuntu-22.04-arm' }}
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 5G
@@ -204,15 +204,15 @@ jobs:
       - name: 生成 CMake 源文件
         run: python3 scripts/build.py generate-sources "${{ env.DART_VERSION }}"
 
-      - name: 构建 Dart VM（x86_64，用于解析 Flutter Windows 桌面 app.so）
-        run: python3 scripts/build.py build-dartvm "${{ env.DART_VERSION }}" --arch x86_64
+      - name: 构建 Dart VM（aarch64_windows：ARM 宿主编译 linux/arm64 非压缩，用于解析 Flutter Windows 桌面 app.so）
+        run: python3 scripts/build.py build-dartvm "${{ env.DART_VERSION }}" --arch aarch64_windows
 
-      - name: 构建 blutter（x86_64）
-        run: python3 scripts/build.py build-blutter "${{ env.DART_VERSION }}" --arch x86_64
+      - name: 构建 blutter（aarch64_windows）
+        run: python3 scripts/build.py build-blutter "${{ env.DART_VERSION }}" --arch aarch64_windows
 
       - name: 重命名产物为 windows_x64_<suffix> 命名
         run: |
-          mv "bin/blutter_dartvm${{ env.DART_VERSION }}_linux_x64" "bin/blutter_dartvm${{ env.DART_VERSION }}_windows_x64_${{ env.RUNNER_SUFFIX }}"
+          mv "bin/blutter_dartvm${{ env.DART_VERSION }}_linux_arm64" "bin/blutter_dartvm${{ env.DART_VERSION }}_windows_x64_${{ env.RUNNER_SUFFIX }}"
           ls -la bin/
 
       - name: 打包上传 packages (可选)

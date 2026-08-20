@@ -108,7 +108,9 @@ jobs:
       fail-fast: false
       matrix:
         worker: ${{ fromJson(needs.prepare.outputs.workers) }}
-    runs-on: ${{ (startsWith(inputs.build_target, 'windows_') && 'windows-latest') || (inputs.build_target == 'ubuntu_24' && 'ubuntu-24.04-arm') || (inputs.build_target == 'ubuntu_22' && 'ubuntu-22.04-arm') || (inputs.build_target == 'ubuntu_24_windows' && 'ubuntu-24.04') || (inputs.build_target == 'ubuntu_22_windows' && 'ubuntu-22.04') || 'ubuntu-22.04-arm' }}
+    # ubuntu_*（含 ubuntu_*_windows）均在 ARM64 runner 上原生构建：
+    # 安卓目标产物 aarch64 解析 arm64，Windows 目标产物 aarch64 解析 x64（aarch64_windows）
+    runs-on: ${{ (startsWith(inputs.build_target, 'windows_') && 'windows-latest') || (inputs.build_target == 'ubuntu_24' || inputs.build_target == 'ubuntu_24_windows') && 'ubuntu-24.04-arm' || 'ubuntu-22.04-arm' }}
     env:
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_MAXSIZE: 5G
@@ -116,7 +118,7 @@ jobs:
       CCACHE_NOHASHDIR: "true"
       CCACHE_NOHARDLINK: "true"
       RUNNER_SUFFIX: ${{ (inputs.build_target == 'ubuntu_24' || inputs.build_target == 'ubuntu_24_windows') && '24' || (inputs.build_target == 'ubuntu_22' || inputs.build_target == 'ubuntu_22_windows') && '22' || 'win' }}
-      BUILD_ARCH: ${{ (inputs.build_target == 'windows_windows' && 'windows_x64') || (inputs.build_target == 'ubuntu_22_windows' || inputs.build_target == 'ubuntu_24_windows') && 'x86_64' || 'aarch64' }}
+      BUILD_ARCH: ${{ (inputs.build_target == 'windows_windows' && 'windows_x64') || (inputs.build_target == 'ubuntu_22_windows' || inputs.build_target == 'ubuntu_24_windows') && 'aarch64_windows' || 'aarch64' }}
       DART_NAME: ${{ (inputs.build_target == 'windows_windows' || inputs.build_target == 'ubuntu_22_windows' || inputs.build_target == 'ubuntu_24_windows') && 'windows_x64' || 'android_arm64' }}
       GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
       GITEE_TARGET_REPO: qeruiop_admin/blutter_build_actions
@@ -254,12 +256,14 @@ jobs:
           PLATFORM="${{ startsWith(inputs.build_target, 'windows_') && 'windows' || 'linux' }}"
           GITEE_PIDS=()
           if [ "$PLATFORM" = "windows" ]; then PY=python; EXT=".exe"; else PY=python3; EXT=""; fi
-          # build.py 产物源文件名：aarch64→android_arm64、windows_x64→windows_x64、x86_64→linux_x64
+          # build.py 产物源文件名：aarch64→android_arm64、windows_x64→windows_x64、
+          # x86_64→linux_x64、aarch64_windows→linux_arm64（ARM 宿主解析 Windows）
           case "$BUILD_ARCH" in
-            aarch64)      SRC_NAME="android_arm64" ;;
-            windows_x64)  SRC_NAME="windows_x64" ;;
-            x86_64)       SRC_NAME="linux_x64" ;;
-            *)            echo "错误：未知 BUILD_ARCH=$BUILD_ARCH"; exit 1 ;;
+            aarch64)          SRC_NAME="android_arm64" ;;
+            windows_x64)      SRC_NAME="windows_x64" ;;
+            x86_64)           SRC_NAME="linux_x64" ;;
+            aarch64_windows)  SRC_NAME="linux_arm64" ;;
+            *)                echo "错误：未知 BUILD_ARCH=$BUILD_ARCH"; exit 1 ;;
           esac
 
           # Windows 依赖（ICU + capstone）仅准备一次，后续版本复用
