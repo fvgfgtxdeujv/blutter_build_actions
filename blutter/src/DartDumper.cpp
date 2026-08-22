@@ -137,69 +137,40 @@ void DartDumper::Dump4Ida(std::filesystem::path outDir)
 import ida_funcs
 import idaapi
 import os
+import idc
 
-# ---- IDA version auto-detection ----
-import ida_ua
-insn = ida_ua.insn_t()
-
-_OLD_IDA = False
-try:
-    import idc  # removed in IDA 9.x
-    _OLD_IDA = True
-except ImportError:
-    import ida_typeinf
-
+# ---- IDA version handling ----
+# Note: 'import idc' succeeds on every IDA generation (idc still exists in 9.x),
+# so it cannot detect the legacy API. The idc compat functions below
+# (get_struc_id / import_type / op_stroff / set_member_cmt) work on both legacy
+# IDA and IDA 9, so they are used unconditionally.
 def _get_struc_id(name):
-    if _OLD_IDA:
-        return idc.get_struc_id(name)
-    return ida_typeinf.get_struc_id(name)
+    return idc.get_struc_id(name)
 
 def _import_type(til, name):
-    if _OLD_IDA:
-        return idc.import_type(til, name)
-    return ida_typeinf.import_type(til, name)
+    return idc.import_type(til, name)
 
 def _parse_types(file, flags):
-    if _OLD_IDA:
-        return idaapi.idc_parse_types(file, flags)
-    return ida_typeinf.parse_decls(file, flags)
+    return idaapi.idc_parse_types(file, flags)
 
-BADADDR = idc.BADADDR if _OLD_IDA else idaapi.BADADDR
+BADADDR = idaapi.BADADDR
 
 def create_Dart_structs():
     sid1 = _get_struc_id("DartThread")
-    if sid1 != BADADDR:
-        return sid1, _get_struc_id("DartObjectPool")
-    hdr_file = os.path.join(os.path.dirname(__file__), 'ida_dart_struct.h')
-    _parse_types(hdr_file, idc.PT_FILE if _OLD_IDA else ida_typeinf.HTI_PP_SILENT)
-    sid1 = _import_type(-1, "DartThread")
-    sid2 = _import_type(-1, "DartObjectPool")
-    if _OLD_IDA:
-        import ida_struct
-        return sid1, sid2, ida_struct.get_struc(sid2)
-    til = ida_typeinf.get_idati()
-    return sid1, sid2, til.get_named_type(ida_typeinf.BTF_STRUCT, "DartObjectPool")
+    sid2 = _get_struc_id("DartObjectPool")
+    if sid1 == BADADDR:
+        hdr_file = os.path.join(os.path.dirname(__file__), 'ida_dart_struct.h')
+        _parse_types(hdr_file, idc.PT_FILE)
+        sid1 = _import_type(-1, "DartThread")
+        sid2 = _import_type(-1, "DartObjectPool")
+    return sid1, sid2, sid2
 
 def set_stroff(addr, op_idx, sid):
-    if _OLD_IDA:
-        idc.op_stroff(insn, op_idx, sid, 0)
-    else:
-        ida_ua.decode_insn(insn, addr)
-        ida_ua.set_forced_operand(insn, op_idx, sid)
+    idc.op_stroff(addr, op_idx, sid, 0)
 
 def set_member_cmt(struct_or_tif, offset, cmt):
-    if _OLD_IDA:
-        import ida_struct
-        m = ida_struct.get_member(struct_or_tif, offset)
-        if m:
-            ida_struct.set_member_cmt(m, cmt, True)
-    else:
-        udm = struct_or_tif.get_udm_by_offset(offset)
-        if udm is not None:
-            udm.cmt = cmt
-            udm.set_regcmt(True)
+    idc.set_member_cmt(struct_or_tif, offset, cmt, True)
 )CBLOCK";
-	of << "\treturn create_Dart_structs()\n";
 	of << "sid1, sid2, pp_struct = create_Dart_structs()\n";
 
 	of << "print('Applying Thread and Object Pool struct')\n";
@@ -207,7 +178,7 @@ def set_member_cmt(struct_or_tif, offset, cmt):
 
 	of << "print('Setting Object Pool comments')\n";
 	for (const auto& [offset, comment] : comments) {
-		of << "\tset_member_cmt(pp_struct, " << offset << ", '''" << comment << "''')\n";
+		of << "set_member_cmt(pp_struct, " << offset << ", '''" << comment << "''')\n";
 	}
 
 	of << "print('Script finished!')\n";
