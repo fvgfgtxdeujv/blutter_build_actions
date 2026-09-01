@@ -2,9 +2,10 @@
 
 记录时间：2026-09-01  
 样本：zip Android ARM64 `/tmp/opencode/zip_test/extract/libapp.so`  
-产物：`/tmp/opencode/zip_test/out/`  
-HEAD：`589003b`（`master` ahead 1，未推远程）  
-约束：只在 `// semantic:` 注释和 `strings_to_funcs.txt` 交叉表里加线索，不改真实符号名。
+产物：hex 过滤前 `/tmp/opencode/zip_test/out/`；hex+短名 `/tmp/opencode/zip_test/out_hexfilter/`；噪声过滤 `/tmp/opencode/zip_test/out_noisefilter/`  
+HEAD：`1e7c84c`（噪声过滤尚未提交）  
+约束：只在 `// semantic:` 注释和 `strings_to_funcs.txt` 交叉表里加线索，不改真实符号名。  
+噪声过滤规格：`.monkeycode/specs/2026-09-01-semantic-clue-noise-filter/`
 
 ## 1. 当前实现（尚未扩收集）
 
@@ -180,8 +181,9 @@ Field <_GrowableList@0150898._Vm@0150898>: static late final (offset: 0x0)
 - CLI：`-i` / `-o`，位置参数不对
 - `packages/`、`scripts/__pycache__/` 不入库；提交只在当前 `master` 本地做，不切分支、不推远程
 
-## 8. 下一步（文档写完后继续）
+## 8. 已落地（hex 过滤 + 短名 + 噪声过滤）
 
-1. 收紧 `isSemanticString` 的 hex 过滤
-2. `DumpCode` 第一趟循环：PoolOffset 非 String 取可读 Field / 有意义 Type / 非 stub Function；另扫 `AsmText::Call` 非 stub 目标
-3. clang-16 增量编译 arm64，对 zip `libapp.so` 回归，对照第 6 节
+1. `isHexBlob`：剥引号后长度 ≥16 且全 `isxdigit` 则丢；曲线名因含非 hex 字母保留
+2. `DumpCode` 三趟：String（进交叉表）→ Field/Type/Function → 非 stub Call
+3. 噪声过滤（`DartDumper.cpp`）：`CALL_BLACKLIST` / `TYPE_BLACKLIST`；`dart:core` Call 全丢；方法名以 `_` 开头丢；Type≤2 / Call≤4
+4. zip 回归 `out_noisefilter/`：EXIT=0，`Generating Frida script`；交叉表 28604 / 36466（与 hexfilter 持平）；`$obfuscated::__unknown_function__` / `_StringBase::_interpolate` / `type:String`/`List`/`bool`/`Object` = 0；`Hip.dart` `_hFk` 原 8 条字符串 + `field:_port` 仍在；`call:_ExternalBuffer::start` 出现 3 次

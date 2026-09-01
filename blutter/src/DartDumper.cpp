@@ -9,11 +9,24 @@
 #include <numeric>
 #include <cctype>
 #include <string_view>
+#include <unordered_set>
 #include "Disassembler.h"
 #include "DartThreadInfo.h"
 #include "CodeAnalyzer.h"
 
 // TODO: move arm64 specific code to *_arm64 file
+
+// Full-name (cls::method) call clues that are pure noise after URL / private-method filters.
+static const std::unordered_set<std::string> CALL_BLACKLIST = {
+	"$obfuscated::__unknown_function__",
+	"$obfuscated::_ffi_resolver_function",
+	"Shader::Shader._",
+	"LateError::_throwFieldAlreadyInitialized",
+	"Native::_ffi_resolver_function",
+};
+static const std::unordered_set<std::string> TYPE_BLACKLIST = {
+	"String", "List", "bool", "Object", "void",
+};
 
 // Quoted dart string (from getQuoteString) is a semantic clue when it looks
 // like an identifier, URL, SQL, error message, or camelCase token — skip
@@ -147,6 +160,8 @@ static std::string typeClueFromName(std::string_view typeName)
 		typeName = typeName.substr(0, typeName.size() - 1);
 	if (!isUsefulIdent(typeName))
 		return {};
+	if (TYPE_BLACKLIST.count(std::string(typeName)))
+		return {};
 	return "type:" + std::string(typeName);
 }
 
@@ -170,11 +185,25 @@ static std::string callClueFromFn(DartFnBase* fn)
 		return {}; // constructor, low value
 	if (method == "<anonymous closure>" || method.empty())
 		return {};
+	// dart:core (StringBase::_interpolate etc.) is too generic
+	if (rb != std::string_view::npos && rb > 1) {
+		auto url = sv.substr(1, rb - 1);
+		if (url == "dart:core")
+			return {};
+	}
+	if (!method.empty() && method.front() == '_')
+		return {};
+	// private-class tear-off: _Foo::bar.tearoff
+	if (!cls.empty() && cls.front() == '_' && method.find('.') != std::string_view::npos)
+		return {};
 	if (!isUsefulIdent(method) && !(cls.size() && isUsefulIdent(cls)))
 		return {};
-	if (cls.empty())
-		return "call:" + std::string(method);
-	return "call:" + std::string(cls) + "::" + std::string(method);
+	std::string shortName = cls.empty()
+		? std::string(method)
+		: std::string(cls) + "::" + std::string(method);
+	if (CALL_BLACKLIST.count(shortName))
+		return {};
+	return "call:" + shortName;
 }
 
 static std::unordered_map<std::string, std::string> OP_MAP {
@@ -573,11 +602,13 @@ void DartDumper::DumpCode(const char* out_dir)
 					auto& asmTexts = dartFn->GetAnalyzedData()->asmTexts.Data();
 					{
 						std::vector<std::string> clues;
+						std::vector<std::string> typeClues;
+						std::vector<std::string> callClues;
 						std::set<std::string> seen;
-						auto addClue = [&](std::string clue, bool toCrossRef) {
+						auto addClue = [&](std::string clue, bool toCrossRef, std::vector<std::string>* bucket = nullptr) {
 							if (clue.empty() || !seen.insert(clue).second)
 								return;
-							clues.push_back(clue);
+							(bucket ? *bucket : clues).push_back(clue);
 							if (toCrossRef)
 								stringToFuncs[clue].emplace_back(dartFn->Address(), dartFn->FullName());
 						};
@@ -608,11 +639,11 @@ void DartDumper::DumpCode(const char* out_dir)
 								else if (cid == dart::kTypeCid) {
 									auto* t = app.typeDb->FindOrAdd(dart::Type::RawCast(obj.ptr()));
 									if (t)
-										addClue(typeClueFromName(t->ToString(false)), false);
+										addClue(typeClueFromName(t->ToString(false)), false, &typeClues);
 								}
 								else if (cid == dart::kFunctionCid) {
 									auto fnBase = app.GetFunction(dart::Function::Cast(obj).entry_point() - app.base());
-									addClue(callClueFromFn(fnBase), false);
+									addClue(callClueFromFn(fnBase), false, &callClues);
 								}
 							}
 							catch (...) {
@@ -623,8 +654,14 @@ void DartDumper::DumpCode(const char* out_dir)
 							if (asmText.dataType != AsmText::Call)
 								continue;
 							auto* fn = app.GetFunction(asmText.callAddress);
-							addClue(callClueFromFn(fn), false);
+							addClue(callClueFromFn(fn), false, &callClues);
 						}
+						if (typeClues.size() > 2)
+							typeClues.resize(2);
+						if (callClues.size() > 4)
+							callClues.resize(4);
+						clues.insert(clues.end(), typeClues.begin(), typeClues.end());
+						clues.insert(clues.end(), callClues.begin(), callClues.end());
 						if (!clues.empty()) {
 							of << "    // semantic: ";
 							const size_t n = std::min(clues.size(), size_t{16});
