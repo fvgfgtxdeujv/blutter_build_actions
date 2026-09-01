@@ -20,8 +20,7 @@ DartFunction::DartFunction(DartClass& cls, const dart::FunctionPtr ptr) : DartFn
 	// might need internal name for complete getter and setter name
 	name = func.UserVisibleNameCString();
 
-	is_native = func.is_native();
-	//is_closure = name == "<anonymous closure>";
+	is_native = func.is_native();	//is_closure = name == "<anonymous closure>";
 	is_closure = func.IsClosureFunction(); //func.IsNonImplicitClosureFunction();
 	//ASSERT(is_closure == (name == "<anonymous closure>"));
 	// Note: https://github.com/dart-lang/sdk/commit/dcdfcc2b8decc8bf47881f2e93ee5503ea98b7cf#diff-fba8499e9b9e86f518a0ad80eeda6a4309ac5a82c5e9e0b0bf962505e1ecddba
@@ -83,6 +82,17 @@ DartFunction::DartFunction(DartClass& cls, const dart::FunctionPtr ptr) : DartFn
 		//std::cout << std::format("Fn: {}, payload: {:#x}, ep_addr: {:#x}, ep: {:#x}\n", name.c_str(), payload_addr, ep_addr, ep);
 	}
 
+	// In obfuscated apps, the Code object might be replaced with UnknownDartCode stub
+	//   (code.Size() == kUwordMax -> -1, PayloadStart() == 0).
+	//   The function entry point is still correct, so the real size can be
+	//   recovered by scanning instructions from the entry point later.
+	size_unknown = (size == (int64_t)0xFFFFFFFFFFFFFFFFull);
+	if (size_unknown) {
+		// payload/morphic from the stub are meaningless. reset to the entry point.
+		payload_addr = ep_addr;
+		morphic_addr = ep_addr;
+	}
+
 	//if (ep_addr != payload_addr) {
 	//	std::cout << std::format("Fn: {}, payload: {:#x}, morphic: {:#x}, ep: {:#x}\n", name.c_str(), payload_addr, morphic_addr, ep_addr);
 	//}
@@ -112,7 +122,8 @@ DartFunction::DartFunction(DartClass& cls, const dart::FunctionPtr ptr) : DartFn
 // kind should be raw code
 DartFunction::DartFunction(DartClass& cls, const dart::Code& code)
 	: DartFnBase(), cls(cls), parent(nullptr), ptr(dart::Function::null()), kind(NORMAL),
-	is_native(true), is_closure(false), is_ffi(false), is_static(false), is_const(false), is_abstract(false), is_async(false)
+	is_native(true), is_closure(false), is_ffi(false), is_static(false), is_const(false), is_abstract(false), is_async(false),
+	size_unknown(false)
 {
 	payload_addr = code.PayloadStart();
 	if (payload_addr > 0)
@@ -123,6 +134,26 @@ DartFunction::DartFunction(DartClass& cls, const dart::Code& code)
 	size = code.Size();
 	ep_addr = code.EntryPoint() - lib_base;
 	name = "__unknown_function__";
+
+	// same handling as the FunctionPtr constructor: the Code object may be
+	// replaced with the UnknownDartCode stub in obfuscated apps
+	size_unknown = (size == (int64_t)0xFFFFFFFFFFFFFFFFull);
+	if (size_unknown) {
+		// payload/morphic from the stub are meaningless. reset to the entry point.
+		payload_addr = ep_addr;
+		morphic_addr = ep_addr;
+	}
+}
+
+void DartFunction::SetScannedSize(int64_t s)
+{
+	ASSERT(size_unknown);
+	if (s > 0) {
+		size = s;
+		// payload/morphic were reset to the entry point in the constructor
+		ASSERT(payload_addr == ep_addr);
+		ASSERT(morphic_addr == ep_addr);
+	}
 }
 
 std::string DartFunction::FullName() const
@@ -197,6 +228,15 @@ void DartFunction::PrintHead(std::ostream& of) const
 {
 	//of << std::format("    {} /* addr: {:#x}, size: {:#x} */\n", func.ToCString(), ep, code_size);
 	auto zone = dart::Thread::Current()->zone();
+
+	if (size_unknown || ptr == dart::Function::null()) {
+		// obfuscated functions have no accessible Function object/signature
+		of << "  ";
+		of << "_ " << name << "(/* No info */) {\n";
+		of << std::format("    // ** addr: {:#x}, size: {:#x}\n", ep_addr, size);
+		return;
+	}
+
 	auto& func = dart::Function::Handle(zone, ptr);
 
 	// Note: Signature is not dropped in aot when any named parameter is required. (from Function::IsRequiredAt() body)
@@ -234,7 +274,9 @@ void DartFunction::PrintHead(std::ostream& of) const
 		}
 	}
 
-	if (sig.IsNull()) {
+	if (sig.IsNull() || size_unknown || ptr == dart::Function::null()) {
+		// for obfuscated functions the signature is not accessible (the Code
+		// object was replaced with the UnknownDartCode stub)
 		of << "_ " << name << "(/* No info */)";
 	}
 	else {

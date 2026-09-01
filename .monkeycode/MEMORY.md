@@ -46,12 +46,39 @@ Entries discovered by the Agent during task execution should follow this format:
   - Gitee API 的写操作（POST/PUT/DELETE/PATCH）在路由匹配之前有全局登录中间件，未登录时任意路径都返回 401 登录失效；因此无法用无 token 请求探测写接口是否存在，需用 GET 公开接口或 swagger spec 确认。
 
 [Project Knowledge Summary]
+- Date: 2026-08-24
+- Context: Discovered by Agent while adapting blutter to parse an obfuscated APK
+- Category: Build Methods & Environment Configuration
+- Instructions:
+  - blutter 主工程为第三方定制版 /workspace/blutter（含 x64 扩展，src/ 平铺，文件与官方版有差异不能直接覆盖）；官方版源码仅存于其 git 分支 `260824-feat-obfuscated-size-recovery`，本地 /tmp 副本已清理
+  - 构建与运行必须用 background terminal 工具（编译 memory_percent=30 + timeout 600000ms；完整解析 memory_percent=30 + timeout 1200000ms），不得用普通 bash 直接跑
+  - 构建：cd /tmp/opencode/workspace_build/blutter_dartvm3.3.4_android_arm64 && ninja -j4（第三方版构建目录，删除后需重新 cmake 配置）
+  - 运行必须使用构建目录下同名二进制（不是 bin/ 下的旧版）
+  - 完整解析输出加 stdbuf -oL -eL 分行缓冲，日志约 2-3 分钟，成功以 EXIT=0 且出现 "Generating Frida script" 为标志
+  - 输入 libapp.so 唯一：/tmp/opencode/apk_extract/lib/arm64-v8a/libapp.so；输出目录每次用新路径便于对比
+  - 解析输出中带 `Analysis error at line ...` 的 InsnException 打印属预期（单个函数分析退化），程序不崩溃即正常；真正致命的是未捕获异常 terminate（需 gdb 定位）
+  - 第三方版构建必须显式传 -DHAS_RECORD_TYPE=1（CMake 变量）；缺失时会在 DartTypes.cpp:330 FATAL "Invalid abstract type" 崩溃（gdb 栈：loadFromObjectPool → DartTypeDb::FindOrAdd）
+  - 第三方版源码目录需含 scripts/frida.template.js（从官方版复制），并在运行 CWD 放 scripts 软链（FridaWriter 按 exe 目录→父目录→CWD 顺序找模板，否则 copy_file 报 No such file）；该副本已随清理删除，如需本地运行可从仓库根 /workspace/scripts/frida.template.js 复制
+  - 构建依赖 /workspace/packages（已由 symlink 转为真实目录，含 dartvm3.3.4_android_arm64 头文件与静态库），find_package 从 `../packages` 相对源码目录定位
+
+[Project Knowledge Summary]
 - Date: 2026-08-19
-- Context: Discovered by Agent while adding ubuntu_22_windows / ubuntu_24_windows build targets to workflows
+- Context: Discovered by Agent while adding ubuntu_22_windows / ubuntu_24_windows build targets to workflows（该目标已于 2026-08-27 移除）
 - Category: Workflow & Collaboration
 - Instructions:
   - GitHub Actions 的 jobs.<job_id>.name 不支持表达式求值（${{ }} 会原样显示在 UI），本项目约定 job name 一律静态化，动态信息（构建目标等）通过 workflow 级 run-name 展示。
-  - 判断产物源文件名时以 scripts/build.py 的 _arch_suffix 为准：aarch64→android_arm64、windows_x64→windows_x64、x86_64→linux_x64、aarch64_windows→linux_arm64（x86_64 在 x64 宿主为非交叉编译，产物不带头文件后缀）。
+  - 判断产物源文件名时以 scripts/build.py 的 _arch_suffix 为准：aarch64→android_arm64、windows_x64→windows_x64、x86_64→linux_x64（x86_64 在 x64 宿主为非交叉编译，产物不带头文件后缀）。
   - 定制版 blutter.py 的下载 base 必须与解析目标一致（blutter_dartvm<ver>_{os_name}_{arch}），曾因硬编码 android_arm64 导致 windows_x64 产物无法自动下载。
-  - build.py 的 arch 目标拆为「产物架构（os/arch）」与「解析架构（blutter_arch，决定编哪套 CodeAnalyzer/Disassembler）」两维：aarch64_windows = linux/arm64 产物 + 解析 x64 + 非压缩指针；blutter_arch=x64 时 CMake 传 -DNO_FRIDA=1（不生成 frida.js）。
-  - ubuntu_*_windows 目标在 ARM64 runner（ubuntu-*-arm）上原生构建，产物是 aarch64 可执行文件，mv 为 _windows_x64_<suffix> 命名；Dart VM 库 linux/arm64 + COMPRESSED_PTRS=0 的布局与 x64 非压缩一致（64 位小端），可解析 Windows x64 snapshot。
+  - build.py 的 arch 目标拆为「产物架构（os/arch）」与「解析架构（blutter_arch，决定编哪套 CodeAnalyzer/Disassembler）」两维；blutter_arch=x64 时 CMake 传 -DNO_FRIDA=1（不生成 frida.js）。aarch64_windows 目标（ARM 宿主解析 Windows 桌面）已随 ubuntu_*_windows 一并移除。
+  - ubuntu_*_windows 目标已在 build-blutter.yml / build-dart-version.yml / build.py 中整体移除（2026-08-27），保留的构建目标为 windows_android、windows_windows、ubuntu_22、ubuntu_24。
+
+[Project Knowledge Summary]
+- Date: 2026-08-31
+- Context: Discovered by Agent while performing arm64 semantic regression on blutter
+- Category: Build Methods & Troubleshooting & Debugging
+- Instructions:
+  - `libdartvm3.3.4_android_arm64.a`（及 dartvm aarch64 库）实际是 x86-64 机器码 + ARM64 语义宏（TARGET_ARCH_ARM64 / DART_COMPRESSED_POINTERS）：blutter 是解析器不执行 arm64，"android_arm64" 构建 = host x64 编译 + ARM64 宏控制对象布局/语义
+  - build.py 的 aarch64 目标依赖 cross toolchain（`-DCMAKE_TOOLCHAIN_FILE=cross/aarch64-toolchain.cmake`），本地无该文件时 cmake 直接失败；本地 arm64 语义回归应手动 cmake 构建
+  - 手动 arm64 语义构建：cmake 传 `-DBLUTTER_ARCH=arm64` + `-DDARTLIB=dartvm3.3.4_android_arm64`，C/C++ 编译器都要 clang-16（C 编译器若用 gcc 会因不认 `-stdlib=libc++` 在 ABI 探测阶段失败），`-DCMAKE_CXX_FLAGS=-stdlib=libc++ -DCMAKE_EXE_LINKER_FLAGS=-stdlib=libc++`
+  - arm64 语义回归测试输入唯一：/tmp/opencode/apk_extract/lib/arm64-v8a/libapp.so（winapp/app.so 是 windows 快照，arm64 版会报 "Snapshot not compatible" 属预期）
+  - 回归基线法：在 /workspace/blutter（独立 git 仓库）`git stash push` 未提交修改 → 编译基线版 → 跑同一 libapp.so → `git stash pop` → diff 输出目录；pp.txt / objs.txt 中 NativeFn/Closure 运行时地址（0x7f.. 等）每次运行不同属正常，objdump 原始反汇编应一致，asm/*.dart 输出增多为功能增强

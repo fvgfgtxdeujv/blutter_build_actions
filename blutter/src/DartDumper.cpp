@@ -7,11 +7,57 @@
 #include <iostream>
 #include <sstream>
 #include <numeric>
+#include <cctype>
 #include "Disassembler.h"
 #include "DartThreadInfo.h"
 #include "CodeAnalyzer.h"
 
 // TODO: move arm64 specific code to *_arm64 file
+
+// Quoted dart string (from getQuoteString) is a semantic clue when it looks
+// like an identifier, URL, SQL, error message, or camelCase token — skip
+// single-char / punctuation-only / numeric-only literals.
+static bool isSemanticString(const std::string& quoted)
+{
+	if (quoted.size() < 4) // "x"  -> too short
+		return false;
+	const char* s = quoted.c_str();
+	size_t n = quoted.size();
+	if (s[0] != '"' || s[n - 1] != '"')
+		return false;
+	s++;
+	n -= 2;
+	if (n < 2 || n > 80)
+		return false;
+
+	int alpha = 0, digit = 0, other = 0;
+	bool hasSpace = false;
+	for (size_t i = 0; i < n; ++i) {
+		unsigned char c = (unsigned char)s[i];
+		if (c == '\\') {
+			++i;
+			other++;
+			continue;
+		}
+		if (std::isalpha(c) || c == '_')
+			alpha++;
+		else if (std::isdigit(c))
+			digit++;
+		else if (c == ' ')
+			hasSpace = true;
+		else
+			other++;
+	}
+	if (alpha < 2)
+		return false;
+	// numeric-heavy (hex blobs, hashes) are not useful as function names
+	if (digit > alpha * 2)
+		return false;
+	// punctuation-only wrappers
+	if (other > alpha && !hasSpace)
+		return false;
+	return true;
+}
 
 static std::unordered_map<std::string, std::string> OP_MAP {
 	{ "==", "eq" },
@@ -89,9 +135,21 @@ void DartDumper::Dump4Ida(std::filesystem::path outDir)
 	of << "import ida_funcs\n";
 	of << "import idaapi\n\n";
 
-	for (auto lib : app.libs) {
+	// nativeLib collects functions whose Code object owner is a Smi
+	// (obfuscated apps). It is not part of app.libs, so process it explicitly.
+	// Note: only its topClass holds these functions; other classes in
+	// nativeLib are VM-internal classes without a library and should be skipped.
+	const auto dumpLib4Ida = [&](DartLibrary* lib, bool onlyTopClass) {
 		std::string lib_prefix = lib->GetName();
-		for (auto cls : lib->classes) {
+		std::vector<DartClass*> clses;
+		if (onlyTopClass) {
+			if (lib->topClass != nullptr)
+				clses.push_back(lib->topClass);
+		}
+		else {
+			clses = lib->classes;
+		}
+		for (auto cls : clses) {
 			std::string cls_prefix = cls->Name();
 			for (auto dartFn : cls->Functions()) {
 				const auto ep = dartFn->Address();
@@ -113,7 +171,11 @@ void DartDumper::Dump4Ida(std::filesystem::path outDir)
 				}
 			}
 		}
-	}
+	};
+
+	for (auto lib : app.libs)
+		dumpLib4Ida(lib, false);
+	dumpLib4Ida(app.NativeLib(), true);
 
 	for (auto& item : app.stubs) {
 		auto stub = item.second;
@@ -272,11 +334,22 @@ void DartDumper::applyStruct4Ida(std::ostream& of)
 {
 	Disassembler disasmer;
 
-	for (auto lib : app.libs) {
+	// nativeLib collects functions whose Code object owner is a Smi
+	// (obfuscated apps). It is not part of app.libs, so process it explicitly.
+	// Note: only its topClass holds these functions; other classes in
+	// nativeLib are VM-internal classes without a library and should be skipped.
+	const auto applyStruct4IdaLib = [&](DartLibrary* lib, bool onlyTopClass) {
 		if (lib->isInternal)
-			continue;
-
-		for (auto dartCls : lib->classes) {
+			return;
+		std::vector<DartClass*> clses;
+		if (onlyTopClass) {
+			if (lib->topClass != nullptr)
+				clses.push_back(lib->topClass);
+		}
+		else {
+			clses = lib->classes;
+		}
+		for (auto dartCls : clses) {
 			for (auto dartFn : dartCls->Functions()) {
 				if (dartFn->PayloadSize() == 0)
 					continue;
@@ -318,7 +391,11 @@ void DartDumper::applyStruct4Ida(std::ostream& of)
 				}
 			}
 		}
-	}
+	};
+
+	for (auto lib : app.libs)
+		applyStruct4IdaLib(lib, false);
+	applyStruct4IdaLib(app.NativeLib(), true);
 }
 
 const std::string& DartDumper::getQuoteString(dart::Object& obj)
@@ -338,15 +415,27 @@ void DartDumper::DumpCode(const char* out_dir)
 
 	Disassembler disasmer;
 
-	for (auto dartLib : app.libs) {
+	// nativeLib collects functions whose Code object owner is a Smi
+	// (obfuscated apps). It is not part of app.libs, so process it explicitly.
+	// Note: only its topClass holds these functions; other classes in
+	// nativeLib are VM-internal classes without a library and should be skipped.
+	const auto dumpLibCode = [&](DartLibrary* dartLib, bool onlyTopClass) {
 		if (dartLib->isInternal)
-			continue;
+			return;
 
 		auto out_file = dartLib->CreatePath(out_dir);
 		std::ofstream of(out_file);
 		dartLib->PrintCommentInfo(of);
 
-		for (auto dartCls : dartLib->classes) {
+		std::vector<DartClass*> clses;
+		if (onlyTopClass) {
+			if (dartLib->topClass != nullptr)
+				clses.push_back(dartLib->topClass);
+		}
+		else {
+			clses = dartLib->classes;
+		}
+		for (auto dartCls : clses) {
 			dartCls->PrintHead(of);
 
 			if (!dartCls->Fields().empty())
@@ -364,6 +453,31 @@ void DartDumper::DumpCode(const char* out_dir)
 				// use as app is loaded at zero
 				if (dartFn->Size() > 0) {
 					auto& asmTexts = dartFn->GetAnalyzedData()->asmTexts.Data();
+					{
+						std::vector<std::string> clues;
+						std::set<std::string> seen;
+						for (auto& asmText : asmTexts) {
+							if (asmText.dataType != AsmText::PoolOffset)
+								continue;
+							auto s = tryGetPoolString(asmText.poolOffset);
+							if (!s || !isSemanticString(*s) || !seen.insert(*s).second)
+								continue;
+							clues.push_back(*s);
+							stringToFuncs[*s].emplace_back(dartFn->Address(), dartFn->FullName());
+						}
+						if (!clues.empty()) {
+							of << "    // semantic: ";
+							const size_t n = std::min(clues.size(), size_t{16});
+							for (size_t i = 0; i < n; ++i) {
+								if (i)
+									of << ", ";
+								of << clues[i];
+							}
+							if (clues.size() > 16)
+								of << ", ...";
+							of << "\n";
+						}
+					}
 					auto& il_insns = dartFn->GetAnalyzedData()->il_insns;
 					auto il_itr = il_insns.begin();
 					const auto il_end = il_insns.end();
@@ -431,7 +545,11 @@ void DartDumper::DumpCode(const char* out_dir)
 
 			dartCls->PrintFoot(of);
 		}
-	}
+	};
+
+	for (auto dartLib : app.libs)
+		dumpLibCode(dartLib, false);
+	dumpLibCode(app.NativeLib(), true);
 }
 
 // collect instance ptr to dump the full contents in DumpObjects()
@@ -748,7 +866,7 @@ std::string DartDumper::dumpInstance(dart::Object& obj, bool simpleForm, bool ne
 
 	std::vector<DartClass*> parents;
 	auto superCls = dartCls->Parent();
-	while (superCls->Id() != dart::kInstanceCid) {
+	while (superCls != nullptr && superCls->Id() != dart::kInstanceCid) {
 		parents.push_back(superCls);
 		superCls = superCls->Parent();
 	}
@@ -895,6 +1013,42 @@ std::string DartDumper::getPoolObjectDescription(intptr_t offset, bool simpleFor
 	else {
 		throw std::runtime_error(std::format("unknown pool object type: {}", (int)objType).c_str());
 	}
+}
+
+std::optional<std::string> DartDumper::tryGetPoolString(intptr_t offset)
+{
+	try {
+		const auto& pool = app.GetObjectPool();
+		intptr_t idx = dart::ObjectPool::IndexFromOffset(offset);
+		if (idx < 0 || idx >= pool.Length())
+			return std::nullopt;
+		if (pool.TypeAt(idx) != dart::ObjectPool::EntryType::kTaggedObject)
+			return std::nullopt;
+		auto& obj = dart::Object::Handle(pool.ObjectAt(idx));
+		if (!obj.IsString())
+			return std::nullopt;
+		return getQuoteString(obj);
+	}
+	catch (...) {
+		return std::nullopt;
+	}
+}
+
+void DartDumper::DumpStringCrossRef(const char* filename)
+{
+	std::ofstream of(filename);
+	of << "# string -> functions that reference it (from object pool)\n";
+	of << "# generated by blutter semantic dump\n\n";
+	size_t nstr = 0, nref = 0;
+	for (const auto& [s, fns] : stringToFuncs) {
+		nstr++;
+		nref += fns.size();
+		of << s << "\n";
+		for (const auto& [addr, name] : fns)
+			of << std::format("    {:#x}  {}\n", addr, name);
+		of << "\n";
+	}
+	std::cout << std::format("[+] string cross-ref: {} strings, {} function refs\n", nstr, nref);
 }
 
 void DartDumper::DumpObjectPool(const char* filename)

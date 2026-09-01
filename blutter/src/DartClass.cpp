@@ -43,8 +43,15 @@ DartClass::DartClass(const DartLibrary& lib_, const dart::Class& cls) :
 	if (!dart::ClassTable::IsTopLevelCid(id)) {
 		//auto& supCls = dart::Class::Handle(zone, cls.SuperClass());
 		auto supClsPtr = cls.SuperClass();
-		
-		auto superCid = supClsPtr.untag()->id();
+
+		// For some classes in an AOT snapshot, super_type resolves to a null
+		// marker (e.g. 0x8 on windows-target snapshots) instead of
+		// Object::null(); reading id_ from such a pointer yields garbage.
+		// Treat any non-heap pointer as "no superclass".
+		intptr_t superCid = 0;
+		if ((intptr_t)supClsPtr > 0x10000) {
+			superCid = supClsPtr.untag()->id();
+		}
 		if (superCid > 0 && (intptr_t)supClsPtr == (intptr_t)dart::Object::null())
 			superCid = 0;
 		if (superCid)

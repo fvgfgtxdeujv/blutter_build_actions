@@ -864,7 +864,13 @@ void FunctionAnalyzer::handlePrologue(AsmIterator& insn, uint64_t endPrologueAdd
 	}
 
 	// Dart always check stack overflow if allocating stack instruction is emitted
-	auto ilStack = processCheckStackOverflowInstr(insn);
+	std::unique_ptr<CheckStackOverflowInstr> ilStack;
+	try {
+		ilStack = processCheckStackOverflowInstr(insn);
+	}
+	catch (InsnException& e) {
+		printInsnException(e);
+	}
 	if (ilStack) {
 		fnInfo->AddIL(std::move(ilStack));
 	}

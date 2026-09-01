@@ -1,6 +1,9 @@
 #pragma once
 #include "DartApp.h"
 #include <filesystem>
+#include <map>
+#include <optional>
+#include <vector>
 
 class DartDumper
 {
@@ -15,11 +18,13 @@ public:
 
 	void DumpObjectPool(const char* filename);
 	void DumpObjects(const char* filename);
+	void DumpStringCrossRef(const char* filename);
 
 	std::string ObjectToString(dart::Object& obj, bool simpleForm = false, bool nestedObj = false, int depth = 0);
 
 private:
 	std::string getPoolObjectDescription(intptr_t offset, bool simpleForm = true);
+	std::optional<std::string> tryGetPoolString(intptr_t offset);
 
 	std::string dumpInstance(dart::Object& obj, bool simpleForm = false, bool nestedObj = false, int depth = 0);
 	std::string dumpInstanceFields(dart::Object& obj, DartClass& dartCls, intptr_t ptr, intptr_t offset, bool simpleForm = false, bool nestedObj = false, int depth = 0);
@@ -31,4 +36,6 @@ private:
 	DartApp& app;
 	// map for object ptr to unescape string with quote
 	std::unordered_map<intptr_t, std::string> quoteStringCache;
+	// quoted dart string -> (fn address, FullName) collected during DumpCode
+	std::map<std::string, std::vector<std::pair<uint64_t, std::string>>> stringToFuncs;
 };

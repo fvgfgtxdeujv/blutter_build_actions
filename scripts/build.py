@@ -38,7 +38,7 @@ HOST_MACHINE = platform.machine()
 def is_cross_compile(arch):
     if sys.platform == 'win32':
         return False
-    if arch in ("aarch64", "aarch64_windows"):
+    if arch == "aarch64":
         return HOST_MACHINE != "aarch64"
     if arch == "x86_64":
         return HOST_MACHINE not in ("x86_64", "amd64")
@@ -381,12 +381,10 @@ def generate_sources(version):
 
 # blutter_arch 表示解析目标架构（决定编译哪套 CodeAnalyzer/Disassembler），
 # 与产物可执行文件本身的架构（os/arch）相互独立。
-# aarch64_windows：aarch64（ARM）宿主上运行，解析 Flutter Windows 桌面 x64 app.so。
 ARCH_MAP = {
     "aarch64":         {"os": "android", "arch": "arm64", "compressed_ptrs": True,  "blutter_arch": "arm64"},
     "x86_64":          {"os": "linux",   "arch": "x64",   "compressed_ptrs": False, "blutter_arch": "x64"},
     "windows_x64":     {"os": "windows", "arch": "x64",   "compressed_ptrs": False, "blutter_arch": "x64"},
-    "aarch64_windows": {"os": "linux",   "arch": "arm64", "compressed_ptrs": False, "blutter_arch": "x64"},
 }
 
 
@@ -526,10 +524,10 @@ def main():
     p.add_argument("version")
     p = sub.add_parser("build-dartvm")
     p.add_argument("version")
-    p.add_argument("--arch", choices=["aarch64", "x86_64", "windows_x64", "aarch64_windows"], default="aarch64")
+    p.add_argument("--arch", choices=["aarch64", "x86_64", "windows_x64"], default="aarch64")
     p = sub.add_parser("build-blutter")
     p.add_argument("version")
-    p.add_argument("--arch", choices=["aarch64", "x86_64", "windows_x64", "aarch64_windows"], default="aarch64")
+    p.add_argument("--arch", choices=["aarch64", "x86_64", "windows_x64"], default="aarch64")
 
     args = parser.parse_args()
 

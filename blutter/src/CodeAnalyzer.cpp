@@ -13,10 +13,22 @@ void CodeAnalyzer::AnalyzeAll()
 {
 	Disassembler disasmer;
 
-	for (auto lib : app.libs) {
+	// nativeLib collects functions whose Code object owner is a Smi
+	// (obfuscated apps). It is not part of app.libs, so process it explicitly.
+	// Note: only its topClass holds these functions; other classes in
+	// nativeLib are VM-internal classes without a library and should be skipped.
+	const auto analyzeLib = [&](DartLibrary* lib, bool onlyTopClass) {
 		if (lib->isInternal)
-			continue;
-		for (auto cls : lib->classes) {
+			return;
+		std::vector<DartClass*> clses;
+		if (onlyTopClass) {
+			if (lib->topClass != nullptr)
+				clses.push_back(lib->topClass);
+		}
+		else {
+			clses = lib->classes;
+		}
+		for (auto cls : clses) {
 			for (auto dartFn : cls->Functions()) {
 				if (dartFn->Size() == 0)
 					continue;
@@ -30,7 +42,11 @@ void CodeAnalyzer::AnalyzeAll()
 				asm2il(dartFn, asm_insns);
 			}
 		}
-	}
+	};
+
+	for (auto lib : app.libs)
+		analyzeLib(lib, false);
+	analyzeLib(app.NativeLib(), true);
 }
 
 #endif // NO_CODE_ANALYSIS

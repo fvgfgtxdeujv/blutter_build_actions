@@ -89,6 +89,12 @@ public:
 	void PrintHead(std::ostream& of) const;
 	void PrintFoot(std::ostream& of) const;
 
+	// For obfuscated app: Code object is replaced with UnknownDartCode stub,
+	//   so code.Size() returns kUwordMax (-1) and the real size must be
+	//   recovered by scanning instructions from the entry point.
+	bool SizeUnknown() const { return size_unknown; }
+	void SetScannedSize(int64_t s);
+
 private:
 	DartClass& cls;
 	DartFunction* parent; // this value is nullptr for function. parent function/closure for a closure
@@ -101,6 +107,7 @@ private:
 	bool is_const;
 	bool is_abstract;
 	bool is_async;
+	bool size_unknown; // true when Code object is replaced with UnknownDartCode stub
 
 	uint64_t payload_addr; // the start of whole function data (most of them are same as entry point)
 	uint64_t morphic_addr; // Monomorphic entry point (used for check class id before normal entry point)

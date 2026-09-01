@@ -224,6 +224,13 @@ static VarValue* getPoolObject(DartApp& app, intptr_t offset, A64::Register dstR
 			ASSERT(pool.TypeAt(idx) == dart::ObjectPool::EntryType::kImmediate);
 			auto imm = pool.RawValueAt(idx);
 			auto dartFn = app.GetFunction(imm - app.base());
+			// The target may be unknown on a foreign-target snapshot (windows);
+			// fall back to a plain expression instead of dereferencing null.
+			if (dartFn == nullptr || !dartFn->IsStub()) {
+				return new VarExpression(
+					std::format("UnlinkedCall_{:#x}", imm - app.base()),
+					dart::kUnlinkedCallCid);
+			}
 			return new VarUnlinkedCall(*dartFn->AsStub());
 		}
 		case dart::kSubtypeTestCacheCid:
@@ -1653,7 +1660,13 @@ void FunctionAnalyzer::handlePrologue(AsmIterator& insn, uint64_t endPrologueAdd
 		//std::cerr << std::format("endPrologueAddr != insn.address(), {:#x} != {:#x}\n", endPrologueAddr, insn.address());
 	}
 
-	auto ilStack = processCheckStackOverflowInstr(insn);
+	std::unique_ptr<CheckStackOverflowInstr> ilStack;
+	try {
+		ilStack = processCheckStackOverflowInstr(insn);
+	}
+	catch (InsnException& e) {
+		printInsnException(e);
+	}
 	if (ilStack) {
 		fnInfo->AddIL(std::move(ilStack));
 	}

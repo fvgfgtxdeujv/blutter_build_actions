@@ -51,6 +51,7 @@ int main(int argc, char** argv)
 		std::cout << "Generating application functions in asm folder\n";
 #endif
 		dumper.DumpCode((outDir / "asm").string().c_str());
+		dumper.DumpStringCrossRef((outDir / "strings_to_funcs.txt").string().c_str());
 		dumper.Dump4Ida(outDir / "ida_script");
 
 #ifndef NO_FRIDA

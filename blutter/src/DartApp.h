@@ -25,6 +25,10 @@ public:
 	DartFnBase* GetFunction(uint64_t addr);
 	DartField* GetStaticField(intptr_t offset) { return staticFields.at(offset); }
 
+	// nativeLib holds functions whose Code object owner is a Smi (only seen
+	// in obfuscated apps). Expose it so analyzers/dumpers can process them.
+	DartLibrary* NativeLib() { return &nativeLib; }
+
 	dart::ObjectPool& GetObjectPool() { return *ppool; }
 	DartTypeDb* TypeDb() { return typeDb.get(); }
 
@@ -40,6 +44,7 @@ private:
 	void addFunction(uintptr_t ep_addr, const dart::Function& func);
 	void findFunctionInHeap();
 	void finalizeFunctionsInfo();
+	void fixUnknownFunctionSizes();
 	void loadFromObjectPool();
 	void walkObject(dart::Object& obj); // to check field types from existed object
 

@@ -2,12 +2,14 @@
 #include "DartApp.h"
 #include "ElfHelper.h"
 #include "DartLoader.h"
+#include "Disassembler.h"
 PRAGMA_WARNING(push, 0)
 #include <vm/stub_code.h>
 #include <vm/heap/safepoint.h>
 PRAGMA_WARNING(pop)
 #include <format>
 #include <iostream> // for debugging purpose
+#include <cstdlib>
 
 DartApp::DartApp(const char* path) : ppool(NULL), nativeLib(0xdeadead), throwStubAddr(0)
 {
@@ -177,10 +179,152 @@ void DartApp::LoadInfo()
 
 	finalizeFunctionsInfo();
 
+	// recover sizes of functions whose Code object was replaced with
+	// UnknownDartCode stub in the obfuscated app
+	fixUnknownFunctionSizes();
+
+	// functions whose Code owner is a Smi (obfuscated) are attached to
+	// nativeLib.topClass. Give the library a name and mark it as visible so
+	// CodeAnalyzer/DartDumper process them like any other library.
+	if (nativeLib.topClass != nullptr && !nativeLib.topClass->Functions().empty()) {
+		nativeLib.isInternal = false;
+		nativeLib.url = "$obfuscated";
+		nativeLib.name = "$obfuscated";
+		nativeLib.topClass->name = "$obfuscated";
+	}
+
 	//auto fieldTable = isolate->field_table(); //contains only sentinel, null, false, 0
 
 	// there are instruction tables in vm isolate but their code are not called from Dart code (can be skipped)
 	//dart::Dart::vm_isolate_group();
+}
+
+// In obfuscated apps, the Code object of a function may be replaced with the
+// UnknownDartCode stub (code.Size() returns kUwordMax and PayloadStart()
+// returns 0), while Function::entry_point() still points to the real code.
+// This function recovers the size by scanning instructions from the entry
+// point until a function terminator (ret / brk / tail-call br) is found,
+// bounded by the next known code block (function or stub) entry point.
+void DartApp::fixUnknownFunctionSizes()
+{
+	std::vector<uint64_t> knownAddrs;
+	knownAddrs.reserve(functions.size() + stubs.size());
+	for (const auto& [addr, _] : functions)
+		knownAddrs.push_back(addr);
+	for (const auto& [addr, _] : stubs)
+		knownAddrs.push_back(addr);
+	std::sort(knownAddrs.begin(), knownAddrs.end());
+
+	Disassembler disasmer(false);
+	const auto max_scan = (size_t)0x10000;
+	int recovered = 0;
+
+	for (auto& [addr, dartFn] : functions) {
+		if (!dartFn->SizeUnknown())
+			continue;
+
+		// bound by the next known code block entry
+		auto it = std::upper_bound(knownAddrs.begin(), knownAddrs.end(), addr);
+		int64_t next_lim = (it != knownAddrs.end()) ? (int64_t)(*it - addr) : 0;
+
+		// scan instructions from the entry point (bounded by the next block)
+		const size_t scan_len = (next_lim > 0) ? (size_t)next_lim : max_scan;
+		auto asm_insns = disasmer.Disasm((uint8_t*)dartFn->MemAddress(), scan_len, addr);
+		int64_t boundary = 0;
+		const cs_insn* prev = nullptr;
+		for (size_t i = 0; i < asm_insns.Count(); i++) {
+			const auto* insn = asm_insns.Ptr(i);
+			const char* mnem = insn->mnemonic;
+			bool is_terminator = false;
+			uint64_t term_end = insn->address + insn->size;
+#if defined(TARGET_ARCH_X64)
+			// x64 (capstone Intel syntax): ret return, int3/ud2 trap,
+			// unconditional jmp is a tail call that terminates the function
+			if (strcmp(mnem, "ret") == 0 || strcmp(mnem, "int3") == 0 || strcmp(mnem, "ud2") == 0) {
+				is_terminator = true;
+			}
+			else if (strcmp(mnem, "jmp") == 0) {
+				// tail call (direct or indirect) terminates the function
+				is_terminator = true;
+			}
+			if (is_terminator) {
+				boundary = (int64_t)(term_end - addr);
+				// A "ret"/"int3" is usually followed by the stack-overflow
+				// slow path (the dart compiler always places it at the end of
+				// the function after the last ret):
+				//   call <stack_overflow_stub>
+				//   jmp  <back_to_body>
+				// Keep scanning so the recovered size covers the slow path.
+				if (i + 2 < asm_insns.Count()) {
+					const auto* call = asm_insns.Ptr(i + 1);
+					const auto* jmp = asm_insns.Ptr(i + 2);
+					uint64_t jmp_target = 0;
+					if (jmp->op_str[0] == '#')
+						jmp_target = strtoull(jmp->op_str + 1, nullptr, 0);
+					else
+						jmp_target = strtoull(jmp->op_str, nullptr, 0);
+					if (strcmp(call->mnemonic, "call") == 0 && strcmp(jmp->mnemonic, "jmp") == 0 &&
+						jmp_target != 0 && jmp_target < insn->address) {
+						boundary = (int64_t)(jmp->address + jmp->size - addr);
+					}
+				}
+			}
+#else
+			if (strcmp(mnem, "ret") == 0 || strcmp(mnem, "brk") == 0) {
+				is_terminator = true;
+			}
+			else if (strcmp(mnem, "br") == 0) {
+				// inline switchable-call stub: "br x16" right after "ldr x16, [x26, #imm]"
+				if (prev != nullptr && strcmp(prev->mnemonic, "ldr") == 0 &&
+					strstr(prev->op_str, "x16, [x26") != nullptr) {
+					prev = insn;
+					continue;
+				}
+				// tail call (dynamic jump) terminates the function
+				is_terminator = true;
+			}
+			if (is_terminator) {
+				boundary = (int64_t)(term_end - addr);
+				// A "ret"/"brk" is usually followed by the stack-overflow
+				// slow path:
+				//   bl <stack_overflow_stub>
+				//   b  <back_to_body>
+				// The check-stack-overflow branch target points at the end of
+				// the slow path, and CodeAnalyzer asserts the target lies
+				// inside [entry, AddressEnd()), so the recovered size must
+				// cover the slow path as well. A function may contain multiple
+				// rets (one per return path); the slow path sits after the
+				// LAST one, so keep scanning for later terminators.
+				if (i + 2 < asm_insns.Count()) {
+					const auto* bl = asm_insns.Ptr(i + 1);
+					const auto* b = asm_insns.Ptr(i + 2);
+					uint64_t b_target = 0;
+					if (b->op_str[0] == '#')
+						b_target = strtoull(b->op_str + 1, nullptr, 0);
+					if (strcmp(bl->mnemonic, "bl") == 0 && strcmp(b->mnemonic, "b") == 0 &&
+						b_target != 0 && b_target < insn->address) {
+						boundary = (int64_t)(b->address + b->size - addr);
+					}
+				}
+			}
+#endif
+			prev = insn;
+		}
+
+		int64_t size = 0;
+		if (boundary > 0)
+			size = (next_lim > 0 && boundary > next_lim) ? next_lim : boundary;
+		else
+			size = next_lim;
+
+		if (size > 0) {
+			dartFn->SetScannedSize(size);
+			recovered++;
+		}
+	}
+
+	if (recovered > 0)
+		std::cout << std::format("[+] recovered sizes of {} functions (obfuscated Code)\n", recovered);
 }
 
 void DartApp::loadFromClassTable(dart::IsolateGroup* ig)
@@ -245,8 +389,13 @@ void DartApp::loadFromClassTable(dart::IsolateGroup* ig)
 		if (dartCls == NULL)
 			continue;
 
-		if (dartCls->superCls)
-			dartCls->superCls = classes[(intptr_t)dartCls->superCls];
+		if (dartCls->superCls) {
+			const auto scid = (intptr_t)dartCls->superCls;
+			// garbage superclass cid (e.g. from a null-marker SuperClass() on
+			// some snapshots) must not index out of bounds; treat it as none.
+			dartCls->superCls = scid > 0 && scid < (intptr_t)classes.size()
+				? classes[scid] : nullptr;
+		}
 
 		// Dart create a new class for int, double, ... (do not know why built-in is not used)
 		if (dartCls->name == "int") dartIntCid = dartCls->id;
@@ -502,6 +651,7 @@ void DartApp::findFunctionInHeap()
 				// no function, can only make it into top class of native library
 				if (!nativeLib.topClass) {
 					nativeLib.topClass = new DartClass(nativeLib);
+					nativeLib.classes.push_back(nativeLib.topClass);
 				}
 				auto dartFn = nativeLib.topClass->AddFunction(code);
 				functions[dartFn->Address()] = dartFn;
