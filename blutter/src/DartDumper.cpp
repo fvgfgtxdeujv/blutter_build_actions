@@ -8,6 +8,7 @@
 #include <sstream>
 #include <numeric>
 #include <cctype>
+#include <string_view>
 #include "Disassembler.h"
 #include "DartThreadInfo.h"
 #include "CodeAnalyzer.h"
@@ -16,7 +17,20 @@
 
 // Quoted dart string (from getQuoteString) is a semantic clue when it looks
 // like an identifier, URL, SQL, error message, or camelCase token — skip
-// single-char / punctuation-only / numeric-only literals.
+// single-char / punctuation-only / numeric-only literals / hex blobs.
+static bool isHexBlob(std::string_view inner)
+{
+	// a-f count as hex, not as vowels. curve names (secp256k1) have non-hex letters.
+	if (inner.size() < 16)
+		return false;
+	for (size_t i = 0; i < inner.size(); ++i) {
+		unsigned char c = (unsigned char)inner[i];
+		if (c == '\\' || !std::isxdigit(c))
+			return false;
+	}
+	return true;
+}
+
 static bool isSemanticString(const std::string& quoted)
 {
 	if (quoted.size() < 4) // "x"  -> too short
@@ -28,6 +42,8 @@ static bool isSemanticString(const std::string& quoted)
 	s++;
 	n -= 2;
 	if (n < 2 || n > 80)
+		return false;
+	if (isHexBlob(std::string_view(s, n)))
 		return false;
 
 	int alpha = 0, digit = 0, other = 0;
@@ -50,13 +66,115 @@ static bool isSemanticString(const std::string& quoted)
 	}
 	if (alpha < 2)
 		return false;
-	// numeric-heavy (hex blobs, hashes) are not useful as function names
+	// numeric-heavy (hashes) are not useful as function names
 	if (digit > alpha * 2)
 		return false;
 	// punctuation-only wrappers
 	if (other > alpha && !hasSpace)
 		return false;
 	return true;
+}
+
+// Field / Type / Function short names that look like identifiers, not obfuscated junk.
+static bool isUsefulIdent(std::string_view name)
+{
+	if (name.size() < 3 || name.size() > 48)
+		return false;
+	if (name == "<anonymous closure>" || name == "[no name]" || name == "[unknown]")
+		return false;
+
+	// strip leading '_' for the short-junk check: _adg / Teb / _VTl
+	std::string_view core = name;
+	while (!core.empty() && core.front() == '_')
+		core.remove_prefix(1);
+	if (core.size() <= 3)
+		return false;
+
+	int alpha = 0, digit = 0, other = 0, vowel = 0;
+	for (unsigned char c : name) {
+		if (c == '_')
+			continue;
+		else if (std::isalpha(c)) {
+			alpha++;
+			char lc = (char)std::tolower(c);
+			if (lc == 'a' || lc == 'e' || lc == 'i' || lc == 'o' || lc == 'u')
+				vowel++;
+		}
+		else if (std::isdigit(c))
+			digit++;
+		else
+			other++;
+	}
+	if (other)
+		return false;
+	if (alpha < 2)
+		return false;
+	if (!vowel)
+		return false;
+	if (digit > alpha * 2)
+		return false;
+	return true;
+}
+
+static std::string fieldClueFromCString(const char* raw)
+{
+	if (!raw)
+		return {};
+	// "Field <ClassName.fieldName>: late ..."  or  "Field <_GrowableList@0150898._Vm@0150898>: ..."
+	std::string_view s(raw);
+	auto lt = s.find('<');
+	auto gt = s.find('>');
+	if (lt == std::string_view::npos || gt == std::string_view::npos || gt <= lt)
+		return {};
+	auto inner = s.substr(lt + 1, gt - lt - 1);
+	auto dot = inner.rfind('.');
+	std::string_view shortName = (dot == std::string_view::npos) ? inner : inner.substr(dot + 1);
+	auto at = shortName.find('@');
+	if (at != std::string_view::npos)
+		shortName = shortName.substr(0, at);
+	if (!isUsefulIdent(shortName))
+		return {};
+	return "field:" + std::string(shortName);
+}
+
+static std::string typeClueFromName(std::string_view typeName)
+{
+	// drop type args: SecureSocket / List<int> -> SecureSocket / List
+	auto lt = typeName.find('<');
+	if (lt != std::string_view::npos)
+		typeName = typeName.substr(0, lt);
+	if (!typeName.empty() && typeName.back() == '?')
+		typeName = typeName.substr(0, typeName.size() - 1);
+	if (!isUsefulIdent(typeName))
+		return {};
+	return "type:" + std::string(typeName);
+}
+
+static std::string callClueFromFn(DartFnBase* fn)
+{
+	if (!fn || fn->IsStub())
+		return {};
+	std::string full = fn->FullName();
+	// "[dart:io] _ExternalBuffer::start"  or stub-less DartFunction FullName
+	std::string_view sv(full);
+	auto rb = sv.find(']');
+	std::string_view rest = (rb != std::string_view::npos && rb + 2 <= sv.size())
+		? sv.substr(rb + 2)
+		: sv;
+	auto sep = rest.rfind("::");
+	std::string_view method = (sep == std::string_view::npos) ? rest : rest.substr(sep + 2);
+	std::string_view cls;
+	if (sep != std::string_view::npos)
+		cls = rest.substr(0, sep);
+	if (method == cls)
+		return {}; // constructor, low value
+	if (method == "<anonymous closure>" || method.empty())
+		return {};
+	if (!isUsefulIdent(method) && !(cls.size() && isUsefulIdent(cls)))
+		return {};
+	if (cls.empty())
+		return "call:" + std::string(method);
+	return "call:" + std::string(cls) + "::" + std::string(method);
 }
 
 static std::unordered_map<std::string, std::string> OP_MAP {
@@ -456,14 +574,56 @@ void DartDumper::DumpCode(const char* out_dir)
 					{
 						std::vector<std::string> clues;
 						std::set<std::string> seen;
+						auto addClue = [&](std::string clue, bool toCrossRef) {
+							if (clue.empty() || !seen.insert(clue).second)
+								return;
+							clues.push_back(clue);
+							if (toCrossRef)
+								stringToFuncs[clue].emplace_back(dartFn->Address(), dartFn->FullName());
+						};
+						// pass 1: quoted strings (keep original clues first, they go into the cross-ref)
 						for (auto& asmText : asmTexts) {
 							if (asmText.dataType != AsmText::PoolOffset)
 								continue;
 							auto s = tryGetPoolString(asmText.poolOffset);
-							if (!s || !isSemanticString(*s) || !seen.insert(*s).second)
+							if (s && isSemanticString(*s))
+								addClue(*s, true);
+						}
+						// pass 2: Field / Type / Function from the object pool
+						for (auto& asmText : asmTexts) {
+							if (asmText.dataType != AsmText::PoolOffset)
 								continue;
-							clues.push_back(*s);
-							stringToFuncs[*s].emplace_back(dartFn->Address(), dartFn->FullName());
+							try {
+								const auto& pool = app.GetObjectPool();
+								intptr_t idx = dart::ObjectPool::IndexFromOffset(asmText.poolOffset);
+								if (idx < 0 || idx >= pool.Length())
+									continue;
+								if (pool.TypeAt(idx) != dart::ObjectPool::EntryType::kTaggedObject)
+									continue;
+								auto& obj = dart::Object::Handle(pool.ObjectAt(idx));
+								const auto cid = obj.GetClassId();
+								if (cid == dart::kFieldCid) {
+									addClue(fieldClueFromCString(dart::Field::Cast(obj).ToCString()), false);
+								}
+								else if (cid == dart::kTypeCid) {
+									auto* t = app.typeDb->FindOrAdd(dart::Type::RawCast(obj.ptr()));
+									if (t)
+										addClue(typeClueFromName(t->ToString(false)), false);
+								}
+								else if (cid == dart::kFunctionCid) {
+									auto fnBase = app.GetFunction(dart::Function::Cast(obj).entry_point() - app.base());
+									addClue(callClueFromFn(fnBase), false);
+								}
+							}
+							catch (...) {
+							}
+						}
+						// pass 3: non-stub Call targets
+						for (auto& asmText : asmTexts) {
+							if (asmText.dataType != AsmText::Call)
+								continue;
+							auto* fn = app.GetFunction(asmText.callAddress);
+							addClue(callClueFromFn(fn), false);
 						}
 						if (!clues.empty()) {
 							of << "    // semantic: ";
