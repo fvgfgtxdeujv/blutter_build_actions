@@ -1,0 +1,4 @@
+# build 依赖（find_package 从 ../packages 相对定位，本地解包不入库）
+packages/
+# Python 缓存
+scripts/__pycache__/

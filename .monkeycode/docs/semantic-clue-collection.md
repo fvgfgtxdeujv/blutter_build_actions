@@ -1,11 +1,12 @@
 # 对象池语义线索收集记录
 
-记录时间：2026-09-01  
-样本：zip Android ARM64 `/tmp/opencode/zip_test/extract/libapp.so`  
-产物：hex 过滤前 `/tmp/opencode/zip_test/out/`；hex+短名 `/tmp/opencode/zip_test/out_hexfilter/`；噪声过滤 `/tmp/opencode/zip_test/out_noisefilter/`  
-HEAD：`1e7c84c`（噪声过滤尚未提交）  
+记录时间：2026-09-01（最后更新 2026-09-02）  
+样本：zip Android ARM64 `/tmp/opencode/zip_test/extract/libapp.so`；winapp Flutter Windows x64 `/tmp/opencode/winapp/app.so`  
+产物：hex 过滤前 `/tmp/opencode/zip_test/out/`；hex+短名 `/tmp/opencode/zip_test/out_hexfilter/`；噪声过滤 `/tmp/opencode/zip_test/out_noisefilter2/`（zip）、`/tmp/opencode/winapp/out_noisefilter/`（winapp）；回归脚本输出 `/tmp/opencode/{zip_test,winapp}/out_regress/`  
+HEAD：`8466682`（噪声过滤已提交，黑名单补充与回归脚本未提交）  
 约束：只在 `// semantic:` 注释和 `strings_to_funcs.txt` 交叉表里加线索，不改真实符号名。  
-噪声过滤规格：`.monkeycode/specs/2026-09-01-semantic-clue-noise-filter/`
+噪声过滤规格：`.monkeycode/specs/2026-09-01-semantic-clue-noise-filter/`  
+回归脚本：`scripts/regression.sh`
 
 ## 1. 当前实现（尚未扩收集）
 
@@ -179,11 +180,14 @@ Field <_GrowableList@0150898._Vm@0150898>: static late final (offset: 0x0)
 - 现成目录：`/tmp/opencode/ci/build/blutter_arm64_dbg/`（有 ninja）；另有 `/tmp/opencode/workspace_build/blutter_dartvm3.3.4_android_arm64`
 - 构建必须用 background terminal（编译 memory_percent 视峰值；完整解析 timeout 拉长），成功标志：EXIT=0 且出现 `Generating Frida script`
 - CLI：`-i` / `-o`，位置参数不对
-- `packages/`、`scripts/__pycache__/` 不入库；提交只在当前 `master` 本地做，不切分支、不推远程
+- `packages/`、`scripts/__pycache__/` 不入库（已在 `.gitignore`）；提交推送按用户指示执行，不主动切分支
 
 ## 8. 已落地（hex 过滤 + 短名 + 噪声过滤）
 
 1. `isHexBlob`：剥引号后长度 ≥16 且全 `isxdigit` 则丢；曲线名因含非 hex 字母保留
 2. `DumpCode` 三趟：String（进交叉表）→ Field/Type/Function → 非 stub Call
 3. 噪声过滤（`DartDumper.cpp`）：`CALL_BLACKLIST` / `TYPE_BLACKLIST`；`dart:core` Call 全丢；方法名以 `_` 开头丢；Type≤2 / Call≤4
-4. zip 回归 `out_noisefilter/`：EXIT=0，`Generating Frida script`；交叉表 28604 / 36466（与 hexfilter 持平）；`$obfuscated::__unknown_function__` / `_StringBase::_interpolate` / `type:String`/`List`/`bool`/`Object` = 0；`Hip.dart` `_hFk` 原 8 条字符串 + `field:_port` 仍在；`call:_ExternalBuffer::start` 出现 3 次
+4. zip 回归 `out_noisefilter2/`：EXIT=0，`Generating Frida script`；交叉表 28602 / 36466（key 集合与过滤前 md5 一致）；`$obfuscated::__unknown_function__` / `_StringBase::_interpolate` / `type:String`/`List`/`bool`/`Object` = 0；`Hip.dart` `_hFk` 原 8 条字符串 + `field:_port` 仍在；`call:_ExternalBuffer::start` 出现 3 次
+5. 黑名单补充（2026-09-02）：`_fw::call`/`_dw::call`（混淆 async/stream call 包装，两样本各自最高频噪声）、`scheduleMicrotask`、`_SecureFilterImpl::buffers`、`_SocketControlMessageImpl::level`、`allocateOneByteString`、`_AsyncStarStreamController::addStream`/`add`、`_StreamController::Am`、`_Future::timeout`、`_Completer::Bod`
+6. winapp（Flutter Windows x64）回归 `out_noisefilter/`：x64 构建（`BLUTTER_ARCH=x64` + `DARTLIB=dartvm3.3.4_linux_x64` + `NO_FRIDA=1`）解析，EXIT=0；`// semantic:` 3825 行；黑名单全 0（含 `_dw::call`）；`field:_port` 16、`call:DynamicLibrary::ebd` 18（dart:ffi 业务线索保留）
+7. 回归脚本 `scripts/regression.sh`：`--no-build zip|winapp|all`；固定断言黑名单=0、交叉表行数（zip 93673）、业务线索保留（zip `_ExternalBuffer::start`/`startVpn`/`field:_port`；winapp `DynamicLibrary`），当前 PASS=53

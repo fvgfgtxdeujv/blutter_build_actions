@@ -17,12 +17,24 @@
 // TODO: move arm64 specific code to *_arm64 file
 
 // Full-name (cls::method) call clues that are pure noise after URL / private-method filters.
+// Static exact matches only; framework/runtime internals confirmed on the zip sample.
 static const std::unordered_set<std::string> CALL_BLACKLIST = {
 	"$obfuscated::__unknown_function__",
 	"$obfuscated::_ffi_resolver_function",
 	"Shader::Shader._",
 	"LateError::_throwFieldAlreadyInitialized",
 	"Native::_ffi_resolver_function",
+	"_fw::call",                    // async/stream plumbing wrapper (zip sample)
+	"_dw::call",                    // same wrapper pattern (winapp sample)
+	"scheduleMicrotask",            // dart:async scheduler, no business value
+	"_SecureFilterImpl::buffers",   // dart:io secure-socket internals
+	"_SocketControlMessageImpl::level",
+	"allocateOneByteString",        // dart runtime string internals
+	"_AsyncStarStreamController::addStream",
+	"_AsyncStarStreamController::add",
+	"_StreamController::Am",
+	"_Future::timeout",
+	"_Completer::Bod",
 };
 static const std::unordered_set<std::string> TYPE_BLACKLIST = {
 	"String", "List", "bool", "Object", "void",

@@ -82,3 +82,14 @@ Entries discovered by the Agent during task execution should follow this format:
   - 手动 arm64 语义构建：cmake 传 `-DBLUTTER_ARCH=arm64` + `-DDARTLIB=dartvm3.3.4_android_arm64`，C/C++ 编译器都要 clang-16（C 编译器若用 gcc 会因不认 `-stdlib=libc++` 在 ABI 探测阶段失败），`-DCMAKE_CXX_FLAGS=-stdlib=libc++ -DCMAKE_EXE_LINKER_FLAGS=-stdlib=libc++`
   - arm64 语义回归测试输入唯一：/tmp/opencode/apk_extract/lib/arm64-v8a/libapp.so（winapp/app.so 是 windows 快照，arm64 版会报 "Snapshot not compatible" 属预期）
   - 回归基线法：在 /workspace/blutter（独立 git 仓库）`git stash push` 未提交修改 → 编译基线版 → 跑同一 libapp.so → `git stash pop` → diff 输出目录；pp.txt / objs.txt 中 NativeFn/Closure 运行时地址（0x7f.. 等）每次运行不同属正常，objdump 原始反汇编应一致，asm/*.dart 输出增多为功能增强
+
+[Project Knowledge Summary]
+- Date: 2026-09-02
+- Context: Discovered by Agent while adding winapp regression and regression.sh
+- Category: Build Methods & Testing Methods
+- Instructions:
+  - Flutter Windows 桌面样本（/tmp/opencode/winapp/app.so）解析须用 x64 构建：`BLUTTER_ARCH=x64` + `DARTLIB=dartvm3.3.4_linux_x64` + `NO_FRIDA=1`，编译目录 /tmp/opencode/ci/build/blutter_dartvm3.3.4_linux_x64（clang-16 + `-stdlib=libc++`）；用 arm64 语义构建解析会报 "Snapshot not compatible"
+  - x64/NO_FRIDA 构建的成功标志是 `Generating application assemblies`（无 "Generating Frida script"）；arm64/android 构建才打印后者
+  - 两个样本的语义回归一条命令入口：`scripts/regression.sh`（默认先 ninja 两个构建目录；断言基线见 .monkeycode/docs/semantic-clue-collection.md 第 8 节）
+  - 解析产物 asm/*.dart 部分文件含二进制字节，grep 必须加 `-a`（--text），否则被当二进制跳过导致统计失真
+  - 混淆样本的 `Xxx::call`（如 `_fw::call`、`_dw::call`）是 async/stream 包装的稳定噪声，跨 Android/Windows 样本形态一致仅类名不同；按"静态黑名单不启发式"约束逐条加进 `CALL_BLACKLIST`
