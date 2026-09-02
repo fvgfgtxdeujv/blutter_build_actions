@@ -93,3 +93,13 @@ Entries discovered by the Agent during task execution should follow this format:
   - 两个样本的语义回归一条命令入口：`scripts/regression.sh`（默认先 ninja 两个构建目录；断言基线见 .monkeycode/docs/semantic-clue-collection.md 第 8 节）
   - 解析产物 asm/*.dart 部分文件含二进制字节，grep 必须加 `-a`（--text），否则被当二进制跳过导致统计失真
   - 混淆样本的 `Xxx::call`（如 `_fw::call`、`_dw::call`）是 async/stream 包装的稳定噪声，跨 Android/Windows 样本形态一致仅类名不同；按"静态黑名单不启发式"约束逐条加进 `CALL_BLACKLIST`
+
+[Project Knowledge Summary]
+- Date: 2026-09-02
+- Context: Discovered by Agent while merging upstream updates from official blutter
+- Category: Workflow & Collaboration
+- Instructions:
+  - 定制版源码基线 = 官方 blutter commit 3f8cf8a^（2026-08-13 前）；官方 main 最新 4a60ac6（2026-08-18，即 PR #217 merge）。官方相对定制版缺失的 src 更新仅 3f8cf8a 一处（Dart 3.11+ ldur x2,[x29,#-8] 叶子调用前重载参数跳过逻辑），其余官方 commit（f2778a7/528acbe IDA 修复等）已在定制版中
+  - 对比方法：浅克隆 https://github.com/worawit/blutter 到 /tmp/opencode/blutter_official，先 diff 文件清单（官方 blutter/src 43 文件全部存在，定制版多 CodeAnalyzer_x64.cpp/Disassembler_x64.cpp/Disassembler_x64.h），再逐文件 diff 定位差异；用 `git show <commit>:<path>` 取官方各版本文件与定制版比 diff 行数可精确锁定 fork 基线
+  - CodeAnalyzer_arm64.cpp 中 try-catch 包裹 processCheckStackOverflowInstr 是定制版自研容错，合并官方补丁时须保留
+  - 官方根目录 blutter.py/dartvm_fetch_build.py 是官方 dartvm 构建工具链，与定制版 scripts/build.py + packages/ 体系不同，不属于源码合并范畴
