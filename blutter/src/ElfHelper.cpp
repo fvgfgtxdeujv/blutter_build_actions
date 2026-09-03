@@ -32,6 +32,59 @@ struct ElfIdent {
 using namespace dart::elf;
 
 #ifdef _WIN32
+// Dart AOT snapshots contain executable code/stub pages; DEP requires them to be
+// executable, and dartvm's Dart_Initialize crashes on plain RW mapping. Raising the
+// whole private mapping to RWX also works but leaves data/BSS pages executable,
+// which Windows Defender / sandbox heuristics are more likely to flag.
+// Instead, apply page protection per PT_LOAD segment: only segments with PF_X
+// (the snapshot code) are raised to PAGE_EXECUTE_READWRITE; every other segment
+// keeps PAGE_READWRITE so the RWX surface is limited to real code pages.
+static bool applySegmentProtection(void* mem, SIZE_T size)
+{
+	const auto* hdr = static_cast<const ElfHeader*>(mem);
+	if (hdr->program_table_offset == 0 || hdr->num_program_headers == 0)
+		return false; // no program header table to walk
+	if (hdr->program_table_entry_size != sizeof(ProgramHeader))
+		return false; // unexpected ELF layout, do not guess
+	if (hdr->program_table_offset + static_cast<uint64_t>(hdr->num_program_headers) * sizeof(ProgramHeader) > size)
+		return false;
+
+	const auto* ph = reinterpret_cast<const ProgramHeader*>(static_cast<const uint8_t*>(mem) + hdr->program_table_offset);
+
+	// No executable load segment at all: RW mapping is enough, nothing to raise.
+	bool hasExec = false;
+	for (uint16_t i = 0; i < hdr->num_program_headers; i++) {
+		if (ph[i].type == ProgramHeaderType::PT_LOAD && (ph[i].flags & PF_X)) {
+			hasExec = true;
+			break;
+		}
+	}
+	if (!hasExec)
+		return true;
+
+	SYSTEM_INFO si{};
+	GetSystemInfo(&si);
+	const SIZE_T pageSize = si.dwPageSize;
+	const uintptr_t memAddr = reinterpret_cast<uintptr_t>(mem);
+
+	for (uint16_t i = 0; i < hdr->num_program_headers; i++) {
+		const auto& p = ph[i];
+		if (p.type != ProgramHeaderType::PT_LOAD || !(p.flags & PF_X))
+			continue;
+		if (p.file_offset >= size || p.file_size == 0)
+			continue;
+		const uint64_t segEnd = (std::min)(static_cast<uint64_t>(p.file_offset) + p.file_size, static_cast<uint64_t>(size));
+
+		// VirtualProtect works on whole pages: round the range out to page boundaries.
+		const uintptr_t start = (memAddr + p.file_offset) & ~static_cast<uintptr_t>(pageSize - 1);
+		const uintptr_t end = (memAddr + segEnd + pageSize - 1) & ~static_cast<uintptr_t>(pageSize - 1);
+		DWORD oldProt = 0;
+		if (!VirtualProtect(reinterpret_cast<void*>(start), end - start, PAGE_EXECUTE_READWRITE, &oldProt))
+			return false;
+	}
+	return true;
+}
+
 static void* load_map_file(const char* path)
 {
 	HANDLE hFile = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -39,6 +92,43 @@ static void* load_map_file(const char* path)
 		printf("\nCannot find %s\n", path);
 		return NULL;
 	}
+
+	LARGE_INTEGER fileSize{};
+	if (!GetFileSizeEx(hFile, &fileSize) || fileSize.QuadPart <= 0) {
+		CloseHandle(hFile);
+		return NULL;
+	}
+	const SIZE_T size = static_cast<SIZE_T>(fileSize.QuadPart);
+
+	// Private RW mapping for the whole file. BSS/data writes happen in-place here;
+	// code segments get execute permission afterwards, per segment, see below.
+	void* mem = VirtualAlloc(NULL, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+	if (mem == NULL) {
+		CloseHandle(hFile);
+		return NULL;
+	}
+
+	DWORD read = 0;
+	SIZE_T total = 0;
+	while (total < size) {
+		const DWORD chunk = static_cast<DWORD>((std::min)(static_cast<SIZE_T>(1 << 20), size - total));
+		if (!ReadFile(hFile, static_cast<uint8_t*>(mem) + total, chunk, &read, NULL) || read == 0) {
+			VirtualFree(mem, 0, MEM_RELEASE);
+			CloseHandle(hFile);
+			return NULL;
+		}
+		total += read;
+	}
+
+	if (!applySegmentProtection(mem, size)) {
+		VirtualFree(mem, 0, MEM_RELEASE);
+		CloseHandle(hFile);
+		return NULL;
+	}
+
+	CloseHandle(hFile);
+	return mem;
+}
 
 	LARGE_INTEGER fileSize{};
 	if (!GetFileSizeEx(hFile, &fileSize) || fileSize.QuadPart <= 0) {

@@ -103,3 +103,12 @@ Entries discovered by the Agent during task execution should follow this format:
   - 对比方法：浅克隆 https://github.com/worawit/blutter 到 /tmp/opencode/blutter_official，先 diff 文件清单（官方 blutter/src 43 文件全部存在，定制版多 CodeAnalyzer_x64.cpp/Disassembler_x64.cpp/Disassembler_x64.h），再逐文件 diff 定位差异；用 `git show <commit>:<path>` 取官方各版本文件与定制版比 diff 行数可精确锁定 fork 基线
   - CodeAnalyzer_arm64.cpp 中 try-catch 包裹 processCheckStackOverflowInstr 是定制版自研容错，合并官方补丁时须保留
   - 官方根目录 blutter.py/dartvm_fetch_build.py 是官方 dartvm 构建工具链，与定制版 scripts/build.py + packages/ 体系不同，不属于源码合并范畴
+
+[Project Knowledge Summary]
+- Date: 2026-09-02
+- Context: Discovered by Agent while fixing Windows memory mapping in ElfHelper.cpp
+- Category: Troubleshooting & Debugging
+- Instructions:
+  - blutter/src/ElfHelper.cpp 的 _WIN32 分支：整文件读入用 VirtualAlloc(PAGE_READWRITE) + 分块 ReadFile；此前整块 VirtualProtect 为 PAGE_EXECUTE_READWRITE（全量 RWX）。官方 Windows 宿主用 CreateFileMapping(FILE_MAP_COPY) 纯 RW 即可，是因为官方解析的是 arm64 snapshot（arm64 指令无法在 x64 宿主执行）；定制版解析 Windows x64 app.so 时 dartvm 的 Dart_Initialize 会真正执行 snapshot 代码，RW 页触发 DEP 崩溃，因此需要给代码页执行权限
+  - 2026-09-02 起改为按 ELF PT_LOAD 分段：仅 PF_X 段提升 PAGE_EXECUTE_READWRITE，其余保持 PAGE_READWRITE（winapp/app.so 上 RWX 从整文件 25MB 收窄到代码段 ~15MB，数据/BSS 段不再可执行），以降低 Defender/沙箱启发式告警面；ELF 程序头用 dartvm platform/elf.h 的 ElfHeader/ProgramHeader
+  - 该 _WIN32 分支本地无法编译/运行验证（无 mingw、无 windows dartvm 库、非 Windows 宿主）：语法用 stub windows.h + clang++ -fsyntax-only 检查（/tmp/opencode/winstub/），段范围用 python struct 模拟验证；真实 Windows 行为需在 Windows 宿主上实测
