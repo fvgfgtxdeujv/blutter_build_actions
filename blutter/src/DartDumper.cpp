@@ -13,12 +13,23 @@
 #include "Disassembler.h"
 #include "DartThreadInfo.h"
 #include "CodeAnalyzer.h"
+#include <cstdlib>  // std::getenv
+#include <fstream>   // blacklist file loader
 
 // TODO: move arm64 specific code to *_arm64 file
 
-// Full-name (cls::method) call clues that are pure noise after URL / private-method filters.
-// Static exact matches only; framework/runtime internals confirmed on the zip sample.
-static const std::unordered_set<std::string> CALL_BLACKLIST = {
+// ---------------------------------------------------------------------------
+// Semantic-clue blacklists.
+//
+// Built-in defaults below are used when no blacklist file is given (or the file
+// cannot be read). A file overrides them entirely -- edit
+//   blutter/src/semantic_blacklist.txt   (or pass --blacklist <file>)
+// to add entries without recompiling. Format, one entry per line:
+//   # comment / blank line ignored
+//   call:<cls::method full name>      -> CALL_BLACKLIST
+//   type:<type name>                  -> TYPE_BLACKLIST
+//   name:<quoted-string token>        -> NAME_BLACKLIST (function-name candidates)
+static const std::vector<std::string> DEFAULT_CALL_BLACKLIST = {
 	"$obfuscated::__unknown_function__",
 	"$obfuscated::_ffi_resolver_function",
 	"Shader::Shader._",
@@ -36,14 +47,14 @@ static const std::unordered_set<std::string> CALL_BLACKLIST = {
 	"_Future::timeout",
 	"_Completer::Bod",
 };
-static const std::unordered_set<std::string> TYPE_BLACKLIST = {
+static const std::vector<std::string> DEFAULT_TYPE_BLACKLIST = {
 	"String", "List", "bool", "Object", "void",
 };
 
 // Quoted-string literals that must not become a function name. They stay in the
 // // semantic: comment and the cross-ref, but naming a function fn_id / fn_dart_ui
 // adds no information. Lower-case exact matches only; generic JSON/dart words.
-static const std::unordered_set<std::string> NAME_BLACKLIST = {
+static const std::vector<std::string> DEFAULT_NAME_BLACKLIST = {
 	"dart_ui", "id", "type", "name", "method", "text", "code", "key", "data",
 	"url", "from", "new", "start", "length", "uri", "free", "value", "root",
 	"shell", "display", "error", "number", "list", "map", "size", "index",
@@ -51,6 +62,79 @@ static const std::unordered_set<std::string> NAME_BLACKLIST = {
 	"target", "create", "object", "get", "set", "is", "this", "context",
 	"comment", "payload",
 };
+
+struct SemanticBlacklists {
+	std::unordered_set<std::string> call, type, name;
+};
+
+// ---------------------------------------------------------------------------
+// Semantic-clue blacklist loader.
+//
+// The three categories (call/type/name) live in one optional text file so new
+// entries can be added without recompiling. Loading happens once on first
+// access -- always after main's CLI parsing. Resolution priority:
+//   --blacklist <file>  >  $BLUTTER_BLACKLIST  >  compile-time default
+//   (BLUTTER_DEFAULT_BLACKLIST_FILE)  >  built-in defaults above.
+// A readable file fully replaces the built-ins (entries can also be removed).
+
+static std::string g_blacklistFile; // explicit --blacklist override
+
+void SetSemanticBlacklistFile(const std::string& path)
+{
+	g_blacklistFile = path;
+}
+
+static SemanticBlacklists loadSemanticBlacklists()
+{
+	SemanticBlacklists bl;
+	const auto seed = [](std::unordered_set<std::string>& dst, const std::vector<std::string>& src) {
+		dst.insert(src.begin(), src.end());
+	};
+	seed(bl.call, DEFAULT_CALL_BLACKLIST);
+	seed(bl.type, DEFAULT_TYPE_BLACKLIST);
+	seed(bl.name, DEFAULT_NAME_BLACKLIST);
+
+	std::string candidate = g_blacklistFile;
+	if (candidate.empty()) {
+		if (const char* env = std::getenv("BLUTTER_BLACKLIST"))
+			candidate = env;
+	}
+	if (candidate.empty()) {
+#ifdef BLUTTER_DEFAULT_BLACKLIST_FILE
+		candidate = BLUTTER_DEFAULT_BLACKLIST_FILE;
+#endif
+	}
+	if (candidate.empty())
+		return bl;
+
+	std::ifstream ifs(candidate);
+	if (!ifs)
+		return bl; // file missing: keep built-in defaults
+
+	SemanticBlacklists fileBl;
+	std::string line;
+	while (std::getline(ifs, line)) {
+		if (line.empty() || line[0] == '#')
+			continue;
+		if (line.starts_with("call:"))
+			fileBl.call.insert(line.substr(5));
+		else if (line.starts_with("type:"))
+			fileBl.type.insert(line.substr(5));
+		else if (line.starts_with("name:"))
+			fileBl.name.insert(line.substr(5));
+		// unknown prefix: ignored (allows loose notes in the file)
+	}
+	// a file with zero parsed entries means everything was commented out;
+	// still replace defaults so removed built-ins actually disappear
+	return (fileBl.call.empty() && fileBl.type.empty() && fileBl.name.empty())
+		? bl : std::move(fileBl);
+}
+
+static const SemanticBlacklists& semanticBlacklists()
+{
+	static const SemanticBlacklists bl = loadSemanticBlacklists();
+	return bl;
+}
 
 // Quoted dart string (from getQuoteString) is a semantic clue when it looks
 // like an identifier, URL, SQL, error message, or camelCase token — skip
@@ -184,7 +268,7 @@ static std::string typeClueFromName(std::string_view typeName)
 		typeName = typeName.substr(0, typeName.size() - 1);
 	if (!isUsefulIdent(typeName))
 		return {};
-	if (TYPE_BLACKLIST.count(std::string(typeName)))
+	if (semanticBlacklists().type.count(std::string(typeName)))
 		return {};
 	return "type:" + std::string(typeName);
 }
@@ -225,7 +309,7 @@ static std::string callClueFromFn(DartFnBase* fn)
 	std::string shortName = cls.empty()
 		? std::string(method)
 		: std::string(cls) + "::" + std::string(method);
-	if (CALL_BLACKLIST.count(shortName))
+	if (semanticBlacklists().call.count(shortName))
 		return {};
 	return "call:" + shortName;
 }
@@ -284,7 +368,7 @@ static bool isBusinessToken(std::string_view inner)
 		return false;
 	if (!(inner[0] >= 'a' && inner[0] <= 'z'))
 		return false;
-	if (NAME_BLACKLIST.count(std::string(inner)))
+	if (semanticBlacklists().name.count(std::string(inner)))
 		return false;
 	return isUsefulIdent(inner);
 }
@@ -345,7 +429,7 @@ static std::string genSemanticFnToken(const std::vector<std::string>& strings,
 		if (sep != std::string_view::npos)
 			sv = sv.substr(sep + 2);
 		auto t = sanitizeToToken(sv);
-		if (t.empty() || t.size() < 3 || NAME_BLACKLIST.count(t) || !isUsefulIdent(t))
+		if (t.empty() || t.size() < 3 || semanticBlacklists().name.count(t) || !isUsefulIdent(t))
 			continue;
 		return t;
 	}

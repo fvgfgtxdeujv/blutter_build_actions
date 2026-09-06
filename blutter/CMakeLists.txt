@@ -147,6 +147,11 @@ endif()
 
 target_compile_definitions(${BINNAME} PRIVATE ${defines})
 
+# Default semantic-blacklist file, overridable at runtime via --blacklist or
+# $BLUTTER_BLACKLIST (see the loader in DartDumper.cpp).
+target_compile_definitions(${BINNAME} PRIVATE
+	BLUTTER_DEFAULT_BLACKLIST_FILE="${CMAKE_CURRENT_SOURCE_DIR}/src/semantic_blacklist.txt")
+
 target_compile_options(${BINNAME} PRIVATE ${cc_opts})
 
 cmake_path(SET DST_DIR NORMALIZE "${PROJECT_SOURCE_DIR}/../bin")

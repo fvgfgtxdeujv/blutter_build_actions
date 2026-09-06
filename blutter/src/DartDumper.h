@@ -3,7 +3,12 @@
 #include <filesystem>
 #include <map>
 #include <optional>
+#include <string>
 #include <vector>
+
+// Point the semantic-clue blacklist loader at an external file
+// (see --blacklist in main.cpp and the loader in DartDumper.cpp).
+void SetSemanticBlacklistFile(const std::string& path);
 
 // Semantic clues of one function, collected during DumpCode and consumed by
 // Dump4Ida to give obfuscated functions a readable name (see isObfuscatedFnName).

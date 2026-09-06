@@ -1,0 +1,89 @@
+# Semantic-clue blacklists for blutter's IDA dump.
+#
+# This file is read by the semantic-clue collection (DartDumper.cpp). Adding an
+# entry here takes effect on the next run -- no recompile needed. A readable
+# file REPLACES the built-in defaults entirely, so commented-out lines also
+# disable built-in entries.
+#
+# Selection: --blacklist <file>  >  $BLUTTER_BLACKLIST  >  this repo file
+# (compiled in via BLUTTER_DEFAULT_BLACKLIST_FILE)  >  built-in defaults.
+#
+# Format -- one entry per line, '#' starts a comment:
+#   call:<full name, cls::method or top-level fn>   call-clue noise filter
+#   type:<type name>                                 type-clue noise filter
+#   name:<quoted-string token>                       function-name candidate noise
+# Lines without a known prefix are ignored (free for notes).
+
+# ---- call: full-name call clues that are pure noise after URL / private-method
+# ---- filters. Framework / runtime internals, exact matches only.
+call:$obfuscated::__unknown_function__
+call:$obfuscated::_ffi_resolver_function
+call:Shader::Shader._
+call:LateError::_throwFieldAlreadyInitialized
+call:Native::_ffi_resolver_function
+call:_fw::call
+call:_dw::call
+call:scheduleMicrotask
+call:_SecureFilterImpl::buffers
+call:_SocketControlMessageImpl::level
+call:allocateOneByteString
+call:_AsyncStarStreamController::addStream
+call:_AsyncStarStreamController::add
+call:_StreamController::Am
+call:_Future::timeout
+call:_Completer::Bod
+
+# ---- type: types with no business value as type clues
+type:String
+type:List
+type:bool
+type:Object
+type:void
+
+# ---- name: quoted-string literals that must not become a function name.
+# ---- They stay in the // semantic: comment and the cross-ref. Lower-case
+# ---- exact matches only; generic JSON / dart words.
+name:dart_ui
+name:id
+name:type
+name:name
+name:method
+name:text
+name:code
+name:key
+name:data
+name:url
+name:from
+name:new
+name:start
+name:length
+name:uri
+name:free
+name:value
+name:root
+name:shell
+name:display
+name:error
+name:number
+name:list
+name:map
+name:size
+name:index
+name:item
+name:count
+name:string
+name:bool
+name:call
+name:class
+name:null
+name:other
+name:target
+name:create
+name:object
+name:get
+name:set
+name:is
+name:this
+name:context
+name:comment
+name:payload

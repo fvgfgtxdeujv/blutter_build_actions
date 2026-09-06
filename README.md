@@ -53,6 +53,24 @@ Actions → **获取待构建 Dart 版本**，运行后从日志末尾复制待�
 
 建议 Linux 默认 `ubuntu_22`，产物动态库版本与运行环境直接匹配。
 
+## 语义黑名单配置（可选）
+
+解析时 blutter 会收集语义线索（`// semantic:` 注释）并给混淆函数生成可读的 `fn_` 名称（写入 `ida_script/addNames.py`）。候选过滤用的三张黑名单（`call:` 调用线索 / `type:` 类型线索 / `name:` 命名候选）已外置为文本文件，加词无需重编译：
+
+```text
+# 文件：blutter/src/semantic_blacklist.txt
+call:_fw::call          # 逐条精确匹配，'#' 为注释
+type:String
+name:dart_ui
+```
+
+加载优先级：`--blacklist <file>` 命令行参数 > `$BLUTTER_BLACKLIST` 环境变量 > 编译期内置的默认文件 > 代码内置默认。指定的文件可读时**整体替换**内置默认（注释掉的条目即被禁用）；不可读或缺省时回退内置默认。单次运行可对二进制直接传参：
+
+```bash
+# 自定义黑名单（覆盖默认）
+blutter_dartvm3.3.4_android_arm64 --blacklist /path/to/my.txt -i libapp.so -o out
+```
+
 ## 其他
 
 - **版本兼容**：与官方 blutter 支持的 Dart 版本一致

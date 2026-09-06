@@ -204,3 +204,4 @@ Field <_GrowableList@0150898._Vm@0150898>: static late final (offset: 0x0)
 4. SDK 库（url 含 `:`，dart:/package:）函数命名逐字节不变；`<anonymous closure>` 维持 `_anon_closure`；`NO_CODE_ANALYSIS`/空表退化为旧输出
 5. 实测（2026-09-03 最终）：zip 覆盖 606 个混淆函数、winapp 624 个，SDK 零覆盖；样本命中 `fn_startVpn`/`fn_onWXLaunchFromWX`/`fn_init_memory_decoder`/`fn_obx_store_attach_id`/`fn_sign_in_canceled` 等业务名；随机 base64/全大写串/句子/`dart_ui`(曾 179 次)/3 字符短名全部从命名剔除
 6. `regression.sh` 增 `check_semrename`：追踪表非空、`addNames.py` `::fn_` 行数 == 追踪表 `-> fn_` 行数、dart 前缀库零 `::fn_`；总 PASS=61 FAIL=0
+7. 黑名单外置（2026-09-06）：`call:`/`type:`/`name:` 三表移至 `blutter/src/semantic_blacklist.txt`（每行一条、`#` 注释），可读文件**整体替换**内置默认；解析优先级 `--blacklist <file>` > `$BLUTTER_BLACKLIST` > 编译期注入 `BLUTTER_DEFAULT_BLACKLIST_FILE` > 代码内置默认；加词不再重编译。验证：默认路径回归 PASS=61 不变；删空 `name:` 段后 zip 重命名 606→671（`fn_dart_ui` 等原挡词回归，可观测差异证明文件加载生效）
