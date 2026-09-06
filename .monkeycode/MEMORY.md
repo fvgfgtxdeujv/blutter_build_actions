@@ -112,3 +112,13 @@ Entries discovered by the Agent during task execution should follow this format:
   - blutter/src/ElfHelper.cpp 的 _WIN32 分支：整文件读入用 VirtualAlloc(PAGE_READWRITE) + 分块 ReadFile；此前整块 VirtualProtect 为 PAGE_EXECUTE_READWRITE（全量 RWX）。官方 Windows 宿主用 CreateFileMapping(FILE_MAP_COPY) 纯 RW 即可，是因为官方解析的是 arm64 snapshot（arm64 指令无法在 x64 宿主执行）；定制版解析 Windows x64 app.so 时 dartvm 的 Dart_Initialize 会真正执行 snapshot 代码，RW 页触发 DEP 崩溃，因此需要给代码页执行权限
   - 2026-09-02 起改为按 ELF PT_LOAD 分段：仅 PF_X 段提升 PAGE_EXECUTE_READWRITE，其余保持 PAGE_READWRITE（winapp/app.so 上 RWX 从整文件 25MB 收窄到代码段 ~15MB，数据/BSS 段不再可执行），以降低 Defender/沙箱启发式告警面；ELF 程序头用 dartvm platform/elf.h 的 ElfHeader/ProgramHeader
   - 该 _WIN32 分支本地无法编译/运行验证（无 mingw、无 windows dartvm 库、非 Windows 宿主）：语法用 stub windows.h + clang++ -fsyntax-only 检查（/tmp/opencode/winstub/），段范围用 python struct 模拟验证；真实 Windows 行为需在 Windows 宿主上实测
+
+[Project Knowledge Summary]
+- Date: 2026-09-03
+- Context: Discovered by Agent while implementing IDA semantic function renaming (specs/2026-09-03-ida-semantic-fn-rename)
+- Category: Build Methods
+- Instructions:
+  - blutter/src/DartDumper.h/.cpp 语义重命名闭环：DumpCode 把业务库（url 无 ':'）混淆函数（__unknown_function__/剥 _ 核心≤4 且含大写或数字的短名）的线索登记进 fnSemanticClues_（ep → strings/calls）；Dump4Ida 查表用 set_name 覆盖为 fn_{token} 并 set_cmt 记 origin，另写 ida_script/semantic_names.txt 追踪表
+  - 命名候选规则（两轮实测校准，改命名先看此）：业务形字符串（isBusinessToken：无空格/小写开头/词形可读/长3-28/非 NAME_BLACKLIST）取引用序最后一个（_hFk 的 8 条 VPN 串→fn_startVpn）；无则 call 方法段兜底（同受 NAME_BLACKLIST+isUsefulIdent 约束）。SDK 库（url 含 ':'）函数名逐字节不变，NO_CODE_ANALYSIS/空表退化为旧输出
+  - 曾犯错误：初版对任意字符串命名产生 fn_HDEFWVNQfh...(随机串)/fn_dart_ui×179/fn_while_dispatching...(句子) 噪声；calls 环最初无黑名单导致 fn_length/fn_Icd 漏网。验证靠 arm64+x64 双样本实测 + regression.sh check_semrename（PASS=61）
+  - 规格：.monkeycode/specs/2026-09-03-ida-semantic-fn-rename/（requirements/design/tasklist），产物回归在 /tmp/opencode/{zip_test,winapp}/out_regress/

@@ -40,6 +40,18 @@ static const std::unordered_set<std::string> TYPE_BLACKLIST = {
 	"String", "List", "bool", "Object", "void",
 };
 
+// Quoted-string literals that must not become a function name. They stay in the
+// // semantic: comment and the cross-ref, but naming a function fn_id / fn_dart_ui
+// adds no information. Lower-case exact matches only; generic JSON/dart words.
+static const std::unordered_set<std::string> NAME_BLACKLIST = {
+	"dart_ui", "id", "type", "name", "method", "text", "code", "key", "data",
+	"url", "from", "new", "start", "length", "uri", "free", "value", "root",
+	"shell", "display", "error", "number", "list", "map", "size", "index",
+	"item", "count", "string", "bool", "call", "class", "null", "other",
+	"target", "create", "object", "get", "set", "is", "this", "context",
+	"comment", "payload",
+};
+
 // Quoted dart string (from getQuoteString) is a semantic clue when it looks
 // like an identifier, URL, SQL, error message, or camelCase token — skip
 // single-char / punctuation-only / numeric-only literals / hex blobs.
@@ -218,6 +230,128 @@ static std::string callClueFromFn(DartFnBase* fn)
 	return "call:" + shortName;
 }
 
+// ---------------------------------------------------------------------------
+// Semantic function renaming (see .monkeycode/specs/2026-09-03-ida-semantic-fn-rename)
+//
+// SDK / package libraries carry a "dart:..." / "package:..." url; business code
+// in obfuscated apps has no colon in the url ("Hip", "$obfuscated"). Functions of
+// SDK libraries keep their real names and are never renamed.
+static bool isSdkLib(const DartLibrary* lib)
+{
+	return lib && lib->url.find(':') != std::string::npos;
+}
+
+// Dart obfuscator short names: "_hFk", "Snb", "Teb", "AAp". Strip leading '_',
+// then the core must be short and contain an upper-case letter or a digit.
+// Real all-lowercase method names ("load", "add") and longer names never match.
+static bool isObfuscatedFnName(const std::string& name)
+{
+	if (name == "__unknown_function__" || name == "_ffi_resolver_function")
+		return true;
+	std::string_view core(name);
+	while (!core.empty() && core.front() == '_')
+		core.remove_prefix(1);
+	if (core.empty() || core.size() > 4)
+		return false;
+	for (unsigned char c : core) {
+		if (std::isdigit(c) || std::isupper(c))
+			return true;
+	}
+	return false;
+}
+
+static bool isIdentLike(std::string_view s)
+{
+	if (s.empty())
+		return false;
+	if (!(std::isalpha((unsigned char)s[0]) || s[0] == '_'))
+		return false;
+	for (unsigned char c : s) {
+		if (!(std::isalnum(c) || c == '_'))
+			return false;
+	}
+	return true;
+}
+
+// A quoted-string literal is usable as a function name only when it looks like a
+// business identifier: no spaces, lower-case initial (camelCase / snake_case),
+// readable word shape (isUsefulIdent), reasonable length, not a generic word.
+// Sentence-like error messages, library urls, and random obfuscator strings are
+// rejected -- they remain available as // semantic: clues but never as names.
+static bool isBusinessToken(std::string_view inner)
+{
+	if (!isIdentLike(inner) || inner.size() < 3 || inner.size() > 28)
+		return false;
+	if (!(inner[0] >= 'a' && inner[0] <= 'z'))
+		return false;
+	if (NAME_BLACKLIST.count(std::string(inner)))
+		return false;
+	return isUsefulIdent(inner);
+}
+
+static std::string_view unquoteClue(std::string_view q)
+{
+	if (q.size() >= 2 && q.front() == '"' && q.back() == '"')
+		return q.substr(1, q.size() - 2);
+	return q;
+}
+
+// Turn arbitrary clue text into an IDA-legal identifier token: non [A-Za-z0-9_]
+// becomes '_', runs collapse, edges trimmed, length capped. Empty result when the
+// text had no usable character. Leading digit is fine -- callers emit "fn_"+token.
+static std::string sanitizeToToken(std::string_view s)
+{
+	std::string out;
+	out.reserve(std::min<size_t>(s.size(), 80));
+	char prev = 0;
+	for (unsigned char c : s) {
+		char t = (std::isalnum(c) || c == '_') ? (char)c : '_';
+		if (t == '_' && prev == '_')
+			continue;
+		out.push_back(t);
+		prev = t;
+	}
+	size_t b = out.find_first_not_of('_');
+	if (b == std::string::npos)
+		return {};
+	size_t e = out.find_last_not_of('_');
+	out = out.substr(b, e - b + 1);
+	if (out.size() > 64)
+		out.resize(64);
+	return out;
+}
+
+// Pick one readable token for a function from its collected clues. Business-like
+// string literals (isBusinessToken) win -- the LAST one in reference order is
+// kept, as it usually sits closest to the actual operation (a startVpn trigger
+// after the ip/port fields it configures). Call clues are the fallback (method
+// segment of "call:Class::method"). Empty result => keep the legacy name.
+static std::string genSemanticFnToken(const std::vector<std::string>& strings,
+									  const std::vector<std::string>& calls)
+{
+	std::string best;
+	for (auto& q : strings) {
+		auto inner = unquoteClue(q);
+		if (isBusinessToken(inner))
+			best = sanitizeToToken(inner);
+	}
+	if (!best.empty())
+		return best;
+	for (auto& c : calls) {
+		std::string_view sv(c);
+		if (sv.starts_with("call:"))
+			sv.remove_prefix(5);
+		auto sep = sv.rfind("::");
+		if (sep != std::string_view::npos)
+			sv = sv.substr(sep + 2);
+		auto t = sanitizeToToken(sv);
+		if (t.empty() || t.size() < 3 || NAME_BLACKLIST.count(t) || !isUsefulIdent(t))
+			continue;
+		return t;
+	}
+	return {};
+}
+
 static std::unordered_map<std::string, std::string> OP_MAP {
 	{ "==", "eq" },
 	{ "<", "lt" }, { ">", "gt" },
@@ -293,6 +427,8 @@ void DartDumper::Dump4Ida(std::filesystem::path outDir)
 	std::ofstream of((outDir / "addNames.py").string());
 	of << "import ida_funcs\n";
 	of << "import idaapi\n\n";
+	std::ofstream ofNames((outDir / "semantic_names.txt").string());
+	ofNames << "# semantic function rename (generated by blutter)\n";
 
 	// nativeLib collects functions whose Code object owner is a Smi
 	// (obfuscated apps). It is not part of app.libs, so process it explicitly.
@@ -317,7 +453,21 @@ void DartDumper::Dump4Ida(std::filesystem::path outDir)
 				if (fnSize > 0) {
 					of << std::format("ida_funcs.add_func({:#x}, {:#x})\n", ep, ep + fnSize);
 				}
-				of << std::format("idaapi.set_name({:#x}, \"{}_{}::{}_{:x}\")\n", ep, lib_prefix, cls_prefix, name.c_str(), ep);
+				// Semantic renaming: obfuscated functions registered during DumpCode
+				// get a readable "fn_<token>" name; the legacy name is kept as a
+				// comment and in semantic_names.txt. _miss/_check stay legacy-derived.
+				std::string displayName = name;
+				std::string semToken;
+				if (auto it = fnSemanticClues_.find(ep); it != fnSemanticClues_.end()) {
+					semToken = genSemanticFnToken(it->second.strings, it->second.calls);
+					if (!semToken.empty())
+						displayName = "fn_" + semToken;
+				}
+				of << std::format("idaapi.set_name({:#x}, \"{}_{}::{}_{:x}\")\n", ep, lib_prefix, cls_prefix, displayName.c_str(), ep);
+				if (!semToken.empty()) {
+					of << std::format("idaapi.set_cmt({:#x}, \"origin: {}\", 0)\n", ep, name.c_str());
+					ofNames << std::format("{:#x} {} -> fn_{}\n", ep, name, semToken);
+				}
 				if (dartFn->HasMorphicCode()) {
 					const auto payloadAddr = dartFn->PayloadAddress();
 					const auto morphicAddr = dartFn->MonomorphicAddress();
@@ -624,13 +774,26 @@ void DartDumper::DumpCode(const char* out_dir)
 							if (toCrossRef)
 								stringToFuncs[clue].emplace_back(dartFn->Address(), dartFn->FullName());
 						};
+						// Semantic renaming: only obfuscated functions outside SDK
+						// libraries are registered; Dump4Ida renames those by their
+						// clues (see genSemanticFnToken / isObfuscatedFnName).
+						const auto fnEp = dartFn->Address();
+						const bool renameCandidate = !isSdkLib(dartLib) && isObfuscatedFnName(dartFn->Name());
+						auto registerSem = [&](const std::string& clue, bool isCall) {
+							if (!renameCandidate || clue.empty())
+								return;
+							auto& rec = fnSemanticClues_[fnEp];
+							(isCall ? rec.calls : rec.strings).push_back(clue);
+						};
 						// pass 1: quoted strings (keep original clues first, they go into the cross-ref)
 						for (auto& asmText : asmTexts) {
 							if (asmText.dataType != AsmText::PoolOffset)
 								continue;
 							auto s = tryGetPoolString(asmText.poolOffset);
-							if (s && isSemanticString(*s))
+							if (s && isSemanticString(*s)) {
 								addClue(*s, true);
+								registerSem(*s, false);
+							}
 						}
 						// pass 2: Field / Type / Function from the object pool
 						for (auto& asmText : asmTexts) {
@@ -655,7 +818,9 @@ void DartDumper::DumpCode(const char* out_dir)
 								}
 								else if (cid == dart::kFunctionCid) {
 									auto fnBase = app.GetFunction(dart::Function::Cast(obj).entry_point() - app.base());
-									addClue(callClueFromFn(fnBase), false, &callClues);
+									auto callClue = callClueFromFn(fnBase);
+									addClue(callClue, false, &callClues);
+									registerSem(callClue, true);
 								}
 							}
 							catch (...) {
@@ -666,7 +831,9 @@ void DartDumper::DumpCode(const char* out_dir)
 							if (asmText.dataType != AsmText::Call)
 								continue;
 							auto* fn = app.GetFunction(asmText.callAddress);
-							addClue(callClueFromFn(fn), false, &callClues);
+							auto callClue = callClueFromFn(fn);
+							addClue(callClue, false, &callClues);
+							registerSem(callClue, true);
 						}
 						if (typeClues.size() > 2)
 							typeClues.resize(2);

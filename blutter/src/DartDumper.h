@@ -5,6 +5,13 @@
 #include <optional>
 #include <vector>
 
+// Semantic clues of one function, collected during DumpCode and consumed by
+// Dump4Ida to give obfuscated functions a readable name (see isObfuscatedFnName).
+struct FnSemanticClues {
+	std::vector<std::string> strings; // quoted dart strings, reference order, isSemanticString-filtered
+	std::vector<std::string> calls;   // call:Class::method clues, reference order
+};
+
 class DartDumper
 {
 public:
@@ -38,4 +45,7 @@ private:
 	std::unordered_map<intptr_t, std::string> quoteStringCache;
 	// quoted dart string -> (fn address, FullName) collected during DumpCode
 	std::map<std::string, std::vector<std::pair<uint64_t, std::string>>> stringToFuncs;
+	// fn entry address -> semantic clues, registered for obfuscated functions only.
+	// Empty when code analysis is disabled (NO_CODE_ANALYSIS); Dump4Ida then keeps legacy names.
+	std::unordered_map<uint64_t, FnSemanticClues> fnSemanticClues_;
 };

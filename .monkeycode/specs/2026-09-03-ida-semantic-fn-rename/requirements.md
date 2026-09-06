@@ -24,13 +24,13 @@ blutter 解析混淆 Dart AOT 样本时，已将每个函数引用的语义线�
 
 #### Acceptance Criteria
 
-1. WHEN DumpCode 为函数收集到 ≥ 1 条字符串线索，系统 SHALL 以字符串线索为第一优先级生成语义候选名。
-2. WHEN 函数无字符串线索但存在 ≥ 1 条 call 线索，系统 SHALL 以 call 线索为第二优先级生成语义候选名。
-3. WHEN 函数无任何可用线索，系统 SHALL 放弃生成，函数保持原名。
-4. WHEN 字符串线索为含空格的短语（如 `"Running vpn on endpint "`），系统 SHALL 将非 `[A-Za-z0-9_]` 字符替换为 `_` 并压缩连续 `_`，保证候选名为合法标识符。
+1. WHEN DumpCode 为函数收集到 ≥ 1 条字符串线索，系统 SHALL 以其中的「业务形字符串」为第一优先级生成语义候选名；业务形定义为：无空格标识符、小写字母开头、词形可读、长度 3–28、非命名黑名单（`dart_ui`、`id`、`type`、`from`、`start` 等通用词）。
+2. WHEN 函数存在多个业务形字符串线索，系统 SHALL 取引用顺序中最后一个作为候选名（`_hFk` 引用 `proxyIp`…`startVpn` 时命名 `fn_startVpn`）。
+3. WHEN 函数无业务形字符串但存在 ≥ 1 条 call 线索，系统 SHALL 以 call 线索为第二优先级生成语义候选名。
+4. WHEN 函数无任何可用命名线索，系统 SHALL 放弃生成，函数保持原名。
 5. WHEN 净化后的候选名长度超过 64 字符，系统 SHALL 截断到 64 字符。
 6. WHEN 净化后候选名为空或以数字开头，系统 SHALL 添加 `fn_` 前缀。
-7. 系统 SHALL 以「字符串线索按引用顺序、call 线索按引用顺序」确定优先级，且 call 线索取 `call:` 前缀后的方法段（`Class::method` 取 `method`，`method` 保留原样）。
+7. 系统 SHALL 保证句子型/错误消息/库 url/随机混淆串等非业务字符串仅保留在 `// semantic:` 注释与交叉表，不参与函数命名。
 
 ### R2 覆盖范围判定
 

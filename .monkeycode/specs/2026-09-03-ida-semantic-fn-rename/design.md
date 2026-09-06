@@ -40,9 +40,10 @@ graph TD
   - 强命中：`__unknown_function__`、`_ffi_resolver_function`。
   - 短名命中：剥全部前导 `_` 后核心长度 ≤ 4，且核心含大写字母或数字（`_hFk`→`hFk` 含大写 H；`Snb` 含大写 S）。全小写真实方法（`load`、`add`）不命中。
 - `genSemanticFnToken(strings, calls)`：
-  - 候选选取：`strings` 中第一个「无空格且净化前后一致」的标识符样条目优先；否则取第一个可净化条目（净化后非空）。
-  - 候选为空时退化到 `calls`：取 `call:` 前缀后的方法段（`Class::method` → `method`），净化后作为候选。
+  - 候选选取：收集 `strings` 中全部「业务形字符串」（`isBusinessToken`：无空格标识符、小写字母开头、词形可读、长度 3–28、非 `NAME_BLACKLIST` 通用词），取引用顺序中**最后一个**作为候选（贴近函数实际操作的字符串最后被引用，`_hFk` 得 `fn_startVpn`）。
+  - 无业务形字符串时退化到 `calls`：取 `call:` 前缀后的方法段（`Class::method` → `method`），净化后作为候选。
   - 净化：非 `[A-Za-z0-9_]` 替换为 `_`，压缩连续 `_`，截断 64 字符；结果为空或以数字开头时加 `fn_` 前缀。
+  - 句子/错误消息/库 url/随机串仅存于 `// semantic:` 注释与交叉表，不参与命名（2026-09-03 实测校准：初版对任何字符串命名，产生 `fn_HDEFWVNQfh...`、`fn_dart_ui`×179、`fn_while_dispatching_notifications_for` 等噪声，用户确认收紧）。
 
 ### DartDumper 成员与输出
 

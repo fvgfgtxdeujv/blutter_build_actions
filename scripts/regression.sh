@@ -52,9 +52,9 @@ FAIL_MSG=()
 
 assert_zero() { # <描述> <模式文件> <pattern>
 	local desc="$1" semfile="$2" pat="$3"
-	if grep -a -q "$pat" "$semfile"; then
+	if grep -a -q -- "$pat" "$semfile"; then
 		FAIL=$((FAIL + 1))
-		FAIL_MSG+=("FAIL  $desc: 命中 '$pat' ($(grep -a -c "$pat" "$semfile"))")
+		FAIL_MSG+=("FAIL  $desc: 命中 '$pat' ($(grep -a -c -- "$pat" "$semfile"))")
 	else
 		PASS=$((PASS + 1))
 	fi
@@ -63,7 +63,7 @@ assert_zero() { # <描述> <模式文件> <pattern>
 assert_ge() { # <描述> <文件> <pattern> <最低次数>
 	local desc="$1" file="$2" pat="$3" min="$4"
 	local n
-	n="$(grep -a -c "$pat" "$file" 2>/dev/null || true)"
+	n="$(grep -a -c -- "$pat" "$file" 2>/dev/null || true)"
 	if [ "$n" -ge "$min" ]; then
 		PASS=$((PASS + 1))
 	else
@@ -149,6 +149,32 @@ check_common() { # <输出目录> <成功标志关键词> <样本名>
 	rm -f "$tmp"
 }
 
+# ---------------- 语义重命名闭环断言 ----------------
+check_semrename() { # <输出目录> <样本名>
+	local out="$1" name="$2"
+	local py="$out/ida_script/addNames.py"
+	local names_file="$out/ida_script/semantic_names.txt"
+	if [ ! -f "$names_file" ]; then
+		FAIL=$((FAIL + 1))
+		FAIL_MSG+=("FAIL  $name: 缺 $names_file")
+		return
+	fi
+	PASS=$((PASS + 1))
+
+	# 追踪表必须有实际覆盖行（排除 # 头注释）
+	local renamed
+	renamed="$(grep -a -c -- '-> fn_' "$names_file")"
+	assert_ge "$name semantic_names 覆盖行" "$names_file" '-> fn_' 1
+
+	# addNames.py 的 ::fn_ 命名行数与追踪表覆盖行数一致
+	local py_n
+	py_n="$(grep -a -o -- '::fn_[A-Za-z0-9_]*' "$py" | wc -l)"
+	assert_eq "$name addNames.py ::fn_ 行数" "$py_n" "$renamed"
+
+	# SDK 库（dart 前缀）零覆盖：url 含 ':' 的库函数不得出现语义名
+	assert_zero "$name SDK 零覆盖" "$py" 'set_name\(0x[0-9a-f]+, "dart[^"]*::fn_'
+}
+
 # ---------------- zip (Android ARM64) ----------------
 regress_zip() {
 	local out="$ZIP_OUT_DIR"
@@ -170,6 +196,7 @@ regress_zip() {
 	assert_ge 'zip' "$tmp" 'startVpn' 1
 	assert_ge 'zip' "$tmp" 'field:_port' 1
 	rm -f "$tmp"
+	check_semrename "$out" 'zip'
 	echo "    产物: $out"
 }
 
@@ -189,6 +216,7 @@ regress_winapp() {
 	grep -a -h '// semantic:' "$out/asm"/*.dart >"$tmp"
 	assert_ge 'winapp' "$tmp" 'call:DynamicLibrary' 1
 	rm -f "$tmp"
+	check_semrename "$out" 'winapp'
 	echo "    产物: $out"
 }
 

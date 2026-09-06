@@ -1,12 +1,12 @@
 # 对象池语义线索收集记录
 
-记录时间：2026-09-01（最后更新 2026-09-02）  
+记录时间：2026-09-01（最后更新 2026-09-03）  
 样本：zip Android ARM64 `/tmp/opencode/zip_test/extract/libapp.so`；winapp Flutter Windows x64 `/tmp/opencode/winapp/app.so`  
-产物：hex 过滤前 `/tmp/opencode/zip_test/out/`；hex+短名 `/tmp/opencode/zip_test/out_hexfilter/`；噪声过滤 `/tmp/opencode/zip_test/out_noisefilter2/`（zip）、`/tmp/opencode/winapp/out_noisefilter/`（winapp）；回归脚本输出 `/tmp/opencode/{zip_test,winapp}/out_regress/`  
-HEAD：`8466682`（噪声过滤已提交，黑名单补充与回归脚本未提交）  
-约束：只在 `// semantic:` 注释和 `strings_to_funcs.txt` 交叉表里加线索，不改真实符号名。  
+产物：hex 过滤前 `/tmp/opencode/zip_test/out/`；hex+短名 `/tmp/opencode/zip_test/out_hexfilter/`；噪声过滤 `/tmp/opencode/zip_test/out_noisefilter2/`（zip）、`/tmp/opencode/winapp/out_noisefilter/`（winapp）；语义重命名抽样 `/tmp/opencode/{zip_test,winapp}/out_semrename/`；回归脚本输出 `/tmp/opencode/{zip_test,winapp}/out_regress/`  
+约束：只在 `// semantic:` 注释、`strings_to_funcs.txt` 交叉表与 `ida_script/semantic_names.txt` 重命名追踪表里加线索；IDA 展示层可对混淆函数语义重命名，不改 snapshot 真实符号名（SDK 库函数名逐字节不变）。  
 噪声过滤规格：`.monkeycode/specs/2026-09-01-semantic-clue-noise-filter/`  
-回归脚本：`scripts/regression.sh`
+语义重命名规格：`.monkeycode/specs/2026-09-03-ida-semantic-fn-rename/`  
+回归脚本：`scripts/regression.sh`（PASS=61）
 
 ## 1. 当前实现（尚未扩收集）
 
@@ -190,4 +190,17 @@ Field <_GrowableList@0150898._Vm@0150898>: static late final (offset: 0x0)
 4. zip 回归 `out_noisefilter2/`：EXIT=0，`Generating Frida script`；交叉表 28602 / 36466（key 集合与过滤前 md5 一致）；`$obfuscated::__unknown_function__` / `_StringBase::_interpolate` / `type:String`/`List`/`bool`/`Object` = 0；`Hip.dart` `_hFk` 原 8 条字符串 + `field:_port` 仍在；`call:_ExternalBuffer::start` 出现 3 次
 5. 黑名单补充（2026-09-02）：`_fw::call`/`_dw::call`（混淆 async/stream call 包装，两样本各自最高频噪声）、`scheduleMicrotask`、`_SecureFilterImpl::buffers`、`_SocketControlMessageImpl::level`、`allocateOneByteString`、`_AsyncStarStreamController::addStream`/`add`、`_StreamController::Am`、`_Future::timeout`、`_Completer::Bod`
 6. winapp（Flutter Windows x64）回归 `out_noisefilter/`：x64 构建（`BLUTTER_ARCH=x64` + `DARTLIB=dartvm3.3.4_linux_x64` + `NO_FRIDA=1`）解析，EXIT=0；`// semantic:` 3825 行；黑名单全 0（含 `_dw::call`）；`field:_port` 16、`call:DynamicLibrary::ebd` 18（dart:ffi 业务线索保留）
-7. 回归脚本 `scripts/regression.sh`：`--no-build zip|winapp|all`；固定断言黑名单=0、交叉表行数（zip 93673）、业务线索保留（zip `_ExternalBuffer::start`/`startVpn`/`field:_port`；winapp `DynamicLibrary`），当前 PASS=53
+7. 回归脚本 `scripts/regression.sh`：`--no-build zip|winapp|all`；固定断言黑名单=0、交叉表行数（zip 93673）、业务线索保留（zip `_ExternalBuffer::start`/`startVpn`/`field:_port`；winapp `DynamicLibrary`），当前 PASS=61（含第 9 节语义重命名断言）
+
+## 9. IDA 语义函数重命名闭环（2026-09-03）
+
+把「手动看 `// semantic:` 注释」升级为「IDA 加载 addNames.py 即自动重命名混淆函数」。规格 `.monkeycode/specs/2026-09-03-ida-semantic-fn-rename/`。
+
+落地（`blutter/src/DartDumper.h` / `.cpp`）：
+
+1. `DumpCode` 收集循环登记 `fnSemanticClues_`（ep → strings/calls 桶），仅限业务库（url 无 `:`）中经 `isObfuscatedFnName` 判定的混淆函数：`__unknown_function__`/`_ffi_resolver_function` 强命中 + 剥 `_` 核心 ≤4 且含大写/数字的短名（`_hFk`/`Snb`/`Teb`；全小写真实方法如 `load` 不命中）
+2. `Dump4Ida` 查表：命中且候选非空 → `set_name` 覆盖为 `fn_{token}` + `set_cmt` 记 `origin:` 原名；`_miss`/`_check` 保持原名派生；另写 `ida_script/semantic_names.txt` 追踪表（`{addr:#x} {原名} -> fn_{token}`）
+3. 候选规则（实测两轮校准，先宽后紧）：业务形字符串（`isBusinessToken`：无空格标识符、小写开头、词形可读、长 3–28、非 `NAME_BLACKLIST` 通用词）取**引用序最后一个**（`_hFk` 的 8 条 VPN 配置串 → `fn_startVpn`）；无则 call 方法段兜底（同样过 `NAME_BLACKLIST`+`isUsefulIdent`，滤 `length`/`Icd` 类）
+4. SDK 库（url 含 `:`，dart:/package:）函数命名逐字节不变；`<anonymous closure>` 维持 `_anon_closure`；`NO_CODE_ANALYSIS`/空表退化为旧输出
+5. 实测（2026-09-03 最终）：zip 覆盖 606 个混淆函数、winapp 624 个，SDK 零覆盖；样本命中 `fn_startVpn`/`fn_onWXLaunchFromWX`/`fn_init_memory_decoder`/`fn_obx_store_attach_id`/`fn_sign_in_canceled` 等业务名；随机 base64/全大写串/句子/`dart_ui`(曾 179 次)/3 字符短名全部从命名剔除
+6. `regression.sh` 增 `check_semrename`：追踪表非空、`addNames.py` `::fn_` 行数 == 追踪表 `-> fn_` 行数、dart 前缀库零 `::fn_`；总 PASS=61 FAIL=0
