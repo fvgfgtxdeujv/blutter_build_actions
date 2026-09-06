@@ -16,18 +16,9 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 set(CMAKE_CXX_EXTENSIONS OFF)
 if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-	cmake_path(GET CMAKE_CXX_COMPILER PARENT_PATH LLVM_BIN_DIR)
-	if (APPLE)
-		# <format> library is experimental in clang 15 and 16
-		add_compile_options(-fexperimental-library)
-		# need an extra lib for experimental library
-		add_link_options(-fexperimental-library -L${LLVM_BIN_DIR}/../lib/c++ -dead_strip)
-	else()
-		# Linux: clang 默认使用 libstdc++（无 std::format），改用 libc++ 提供 <format>
-		#   （macOS 分支的 -dead_strip 与 -L.../lib/c++ 是 Darwin 专属，Linux 不适用）
-		add_compile_options(-stdlib=libc++ -fexperimental-library)
-		add_link_options(-stdlib=libc++ -fexperimental-library)
-	endif()
+	# Linux: clang 默认使用 libstdc++（无 std::format），改用 libc++ 提供 <format>
+	add_compile_options(-stdlib=libc++ -fexperimental-library)
+	add_link_options(-stdlib=libc++ -fexperimental-library)
 endif()
 
 find_package(${DARTLIB} REQUIRED PATHS "${PROJECT_SOURCE_DIR}/../packages")

@@ -14,10 +14,6 @@ set(CMAKE_INSTALL_PREFIX "${PROJECT_SOURCE_DIR}/../../packages" CACHE PATH "" FO
 
 if (MSVC)
 	set(ICU_ROOT "${PROJECT_SOURCE_DIR}/../../external/icu-windows")
-elseif (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
-	set(CMAKE_OSX_DEPLOYMENT_TARGET "13.0" CACHE STRING "" FORCE)
-	execute_process(COMMAND brew --prefix icu4c OUTPUT_VARIABLE BREW_ICU)
-	string(STRIP "${BREW_ICU}" ICU_ROOT)
 endif()
 find_package(ICU REQUIRED uc)
 
@@ -26,8 +22,8 @@ string(SUBSTRING ${PROJECT_NAME} 6 -1 DART_VERSION)
 if (NOT DEFINED TARGET_OS)
 	set(TARGET_OS "android")
 endif()
-if (NOT "${TARGET_OS}" MATCHES "^(android|ios|windows|linux)$")
-	message(FATAL_ERROR "Only android, ios, windows or linux platform")
+if (NOT "${TARGET_OS}" MATCHES "^(android|windows|linux)$")
+	message(FATAL_ERROR "Only android, windows or linux platform")
 endif()
 
 if (NOT DEFINED TARGET_ARCH)
@@ -54,7 +50,7 @@ set_target_properties(${LIBNAME} PROPERTIES
 	VISIBILITY_INLINES_HIDDEN ON
 	POSITION_INDEPENDENT_CODE ON)
 
-# DART_TARGET_OS_ANDROID / DART_TARGET_OS_MACOS_IOS / DART_TARGET_OS_WINDOWS
+# DART_TARGET_OS_ANDROID / DART_TARGET_OS_WINDOWS / DART_TARGET_OS_LINUX
 if (${TARGET_OS} STREQUAL "android")
 	set(target_os "DART_TARGET_OS_ANDROID")
 elseif (${TARGET_OS} STREQUAL "windows")
@@ -62,7 +58,7 @@ elseif (${TARGET_OS} STREQUAL "windows")
 elseif (${TARGET_OS} STREQUAL "linux")
 	set(target_os "DART_TARGET_OS_LINUX")
 else()
-	set(target_os "DART_TARGET_OS_MACOS_IOS")
+	message(FATAL_ERROR "Unsupported TARGET_OS: ${TARGET_OS}")
 endif()
 # TARGET_ARCH_ARM64 or TARGET_ARCH_X64
 if (${TARGET_ARCH} STREQUAL "arm64")

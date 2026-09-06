@@ -122,3 +122,9 @@ Entries discovered by the Agent during task execution should follow this format:
   - 命名候选规则（两轮实测校准，改命名先看此）：业务形字符串（isBusinessToken：无空格/小写开头/词形可读/长3-28/非 NAME_BLACKLIST）取引用序最后一个（_hFk 的 8 条 VPN 串→fn_startVpn）；无则 call 方法段兜底（同受 NAME_BLACKLIST+isUsefulIdent 约束）。SDK 库（url 含 ':'）函数名逐字节不变，NO_CODE_ANALYSIS/空表退化为旧输出
   - 曾犯错误：初版对任意字符串命名产生 fn_HDEFWVNQfh...(随机串)/fn_dart_ui×179/fn_while_dispatching...(句子) 噪声；calls 环最初无黑名单导致 fn_length/fn_Icd 漏网。验证靠 arm64+x64 双样本实测 + regression.sh check_semrename（PASS=61）
   - 规格：.monkeycode/specs/2026-09-03-ida-semantic-fn-rename/（requirements/design/tasklist），产物回归在 /tmp/opencode/{zip_test,winapp}/out_regress/
+
+[User Instruction Summary]
+- Date: 2026-09-06
+- Context: 用户决定项目目标形态范围时明确
+- Instructions:
+  - 本项目不适配 iOS 与 macOS（用户不玩）。已删除所有 iOS/Mac 相关代码：ElfHelper.cpp 的 Mach-O 分支、scripts/CMakeLists.txt 的 ios TARGET_OS 与 Darwin/brew ICU 分支、blutter/CMakeLists.txt 的 APPLE 宿主编译分支；TARGET_OS 仅剩 android/windows/linux。后续新功能、CI 矩阵、构建目标一律不引入 iOS/macOS，也不用拿官方 iOS/Mac 能力做对比基准。

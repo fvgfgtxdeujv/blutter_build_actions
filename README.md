@@ -4,6 +4,10 @@
 
 源码合并自 [1903247335/blutter-windows](https://github.com/1903247335/blutter-windows) 的 Flutter Windows (x64) 支持：除 Android arm64 快照解析（保持兼容）外，还可分析 Flutter Windows 桌面应用的 `data/app.so`（x64）。`scripts/build.py` 的目标拆分为「产物架构」与「解析架构」两维：`--arch aarch64`（安卓，压缩指针）、`--arch windows_x64`（Windows 宿主解析 x64）、`--arch x86_64`（Linux x64 宿主解析 x64）。
 
+## 目标范围
+
+支持 **Android arm64** 与 **Flutter Windows 桌面 x64** 两类目标。不适配 iOS / macOS：Mach-O 解析、iOS 目录布局、Darwin 宿主编译等代码已整体移除，CI 矩阵与新增功能均不引入。
+
 ## 产物
 
 | 文件 | 宿主平台 | 说明 |
@@ -40,7 +44,11 @@ Actions → **获取待构建 Dart 版本**，运行后从日志末尾复制待�
 
 ## 定制版 blutter（`定制版blutter.zip`）
 
-精简运行包，解压后运行 `python3 blutter.py <apk或lib目录> <输出目录>`。自动检测 Dart 版本并从仓库 Releases 下载匹配二进制（Linux 自动识别 `_22`/`_24`，Windows 下载 `_win.exe`）；Windows 下首次运行自动补齐三个运行 dll。下载源按国内/国外自动选择（Gitee 镜像 / GitHub 双源，失败自动切换），也可手动下载二进制放入 `$HOME/blutter/bin/`。
+精简运行包，解压后运行 `python3 blutter.py <apk/lib目录/app目录或app.so> <输出目录>`。自动检测目标类型（Android / Flutter Windows 桌面）与 Dart 版本，从仓库 Releases 下载匹配二进制（Linux 自动识别 `_22`/`_24`，Windows 下载 `_win.exe`，Windows 下首次运行自动补齐三个运行 dll）。下载源按国内/国外自动选择（Gitee 镜像 / GitHub 双源，失败自动切换），也可手动下载二进制放入 `$HOME/blutter/bin/`。
+
+- `--blacklist <file>`：语义黑名单文件透传给二进制（覆盖内置默认，`$BLUTTER_BLACKLIST` 环境变量同样生效）
+- iOS / macOS 输入直接报错拒绝（`App`/Mach-O 布局、`--dart-version <ver>_ios_*` 均已移除）
+- 解析产物含 `asm/`（带 `// semantic:` 注释）、`objs.txt`/`pp.txt`、`strings_to_funcs.txt` 交叉表、`ida_script/`（`addNames.py` 语义重命名 + `semantic_names.txt` 追踪表）；`blutter_frida.js` 仅 Android 目标生成
 
 ## 构建目标
 
