@@ -14,18 +14,15 @@
 // IL layer (il.h / VarValue.h / CodeAnalyzer.h) is shared and arch-neutral;
 // A64::Register is an x64 register alias under the A64 namespace.
 //
-// TODO(gap-4): state propagation depth still below arm64. x64 matchers rarely
-//   call State()->SetRegister, so receiver/field typing and value naming are
-//   lost (arm64 binds state in nearly every IL handler). Next steps:
-//   1. bind dst-reg state in pool-load / field-load / call-result matchers
-//   2. type narrowing on class-id / Smi-tag branches (processBranchIfSmiInstr
-//      and instanceof paths feeding VarType)
-//   3. tear-off style patterns: closure entry-point setup via PP then call
-//   4. late param binding: leaf body reads of [fp+0x10+8i] as arg_i. NOTE:
-//      Vars()/State() only live inside the prologue block (Init/Destroy pair
-//      around processPrologueParametersInstr). A first attempt at lazy binding
-//      in processLoadStore segfaulted on Vars()->ValParam(). Prerequisite:
-//      extend AnalyzedFnData vars/state lifetime across the whole asm2il loop.
+// TODO(gap-4): x64 prologue parity with arm64 (lower value, keep for backlog):
+//   1. indexed arg-slot reads "[fp + rdx*4 + 0x18]" (args vector walk) are not
+//      IL-bound yet; needs x64 ArgumentsDescriptor slot ABI confirmation.
+//   2. optional/named parameter prologue scan is a placeholder (see
+//      handleOptionalNamedParameters).
+//   Done: vars/state live across the whole matcher loop (asm2il), and plain
+//   "[fp + 0x10 + 8*i]" body reads bind late to arg_i (processFrameParameterLoad).
+//   Note: field-name/tear-off deepening is NOT the gap — arm64's main loop does
+//   not name fields in IL either.
 // ============================================================================
 
 // ----------------------------------------------------------------------------
@@ -350,6 +347,7 @@ public:
 	std::unique_ptr<AllocateObjectInstr> processTryAllocateObject(AsmIterator& insn);
 	std::unique_ptr<WriteBarrierInstr> processWriteBarrierInstr(AsmIterator& insn);
 	std::unique_ptr<ILInstr> processLoadStore(AsmIterator& insn);
+	std::unique_ptr<ILInstr> processFrameParameterLoad(AsmIterator& insn, InsnMarker& marker);
 
 private:
 	void setAsmTextDataPool(uint64_t addr, uint64_t offset) {
@@ -1268,6 +1266,61 @@ static ArrayOp getArrayOp(AsmIterator& insn, bool isLoad)
 	return ArrayOp();
 }
 
+// Bind "mov reg, [fp + 0x10 + 8*i]" appearing anywhere in the function body to
+// the caller's fixed argument slot. x64 AOT keeps all parameters on the caller
+// stack, and many functions (especially leaf/short ones) only touch the slots
+// in the body, after the prologue parameter scan has already ended.
+std::unique_ptr<ILInstr> FunctionAnalyzer::processFrameParameterLoad(AsmIterator& insn, InsnMarker& marker)
+{
+	if (!(insn.id() == X86_INS_MOV && insn.op_count() == 2 && IsX86Reg(insn.ops(0)) && insn.ops(0).reg != X86_REG_RBP && IsX86Mem(insn.ops(1))))
+		return nullptr;
+	const auto& mem = insn.ops(1).mem;
+	if (!(IsCsDartFp((x86_reg)mem.base) && mem.index == X86_REG_INVALID && mem.disp >= 0x10 && (mem.disp & 7) == 0))
+		return nullptr;
+	if (!fnInfo->useFramePointer)
+		// frameless functions keep the outer rbp, positive slots are not our params
+		return nullptr;
+	if (dartFn->IsClosure())
+		// closure fixed params are indexed from the context part, not caller stack
+		return nullptr;
+
+	const int idx = (int)(mem.disp >> 3) - 2;
+	const A64::Register dstReg{ insn.ops(0).reg };
+
+	if (idx < fnInfo->params.numFixedParam) {
+		// slot already bound (prologue or earlier body read): name this load too
+		auto il = std::make_unique<LoadValueInstr>(insn.Wrap(marker.Take()), dstReg,
+			VarItem{ VarStorage::NewArgument(idx) });
+		fnInfo->State()->SetRegister(dstReg, fnInfo->Vars()->ValParam(idx));
+		++insn;
+		return il;
+	}
+	// first sight of the slot: must continue the fixed prefix in order, with no
+	// optional/named parameters registered before it
+	if (idx != fnInfo->params.numFixedParam)
+		return nullptr;
+	if (fnInfo->params.NumParam() != fnInfo->params.numFixedParam)
+		return nullptr;
+	const int totalParam = dartFn->NumParam();
+	if (totalParam > 0 && idx >= totalParam)
+		return nullptr;
+
+	auto il = std::make_unique<LoadValueInstr>(insn.Wrap(marker.Take()), dstReg,
+		VarItem{ VarStorage::NewArgument(idx) });
+
+	FnParamInfo pi{ dstReg };
+	pi.paramOffset = (int32_t)mem.disp;
+	fnInfo->params.addFixedParam(std::move(pi));
+	if (!dartFn->IsStatic() && fnInfo->params.numFixedParam == 1) {
+		// the first parameter of an instance method is the receiver
+		fnInfo->params[0].name = "this";
+		fnInfo->params[0].type = dartFn->Class().DeclarationType();
+	}
+	fnInfo->State()->SetRegister(dstReg, fnInfo->Vars()->ValParam(idx));
+	++insn;
+	return il;
+}
+
 std::unique_ptr<ILInstr> FunctionAnalyzer::processLoadStore(AsmIterator& insn)
 {
 	InsnMarker marker(insn);
@@ -1278,6 +1331,10 @@ std::unique_ptr<ILInstr> FunctionAnalyzer::processLoadStore(AsmIterator& insn)
 	if (insn.id() == X86_INS_MOV && insn.op_count() == 2 && IsX86Reg(insn.ops(0)) && IsX86Mem(insn.ops(1))) {
 		// load
 		const auto& mem = insn.ops(1).mem;
+		if (IsCsDartFp((x86_reg)mem.base) && mem.disp >= 0x10) {
+			if (auto il_param = processFrameParameterLoad(insn, marker))
+				return il_param;
+		}
 		if (!IsCsDartFp((x86_reg)mem.base) && mem.disp != 0) {
 			const auto arrayOp = getArrayOp(insn, true);
 			if (!arrayOp.IsArrayOp())
@@ -1648,8 +1705,8 @@ void FunctionAnalyzer::handlePrologue(AsmIterator& insn, uint64_t endPrologueAdd
 	bool hasPrologue = false;
 #ifdef HAS_INIT_ASYNC
 	if (fnInfo->stackSize) {
-		fnInfo->InitVars();
-		fnInfo->InitState();
+		// vars and state are owned by asm2il's lifetime now, shared with the
+		// body matcher loop for late parameter binding.
 		try {
 			auto il = processPrologueParametersInstr(insn, endPrologueAddr);
 			if (il) {
@@ -1664,8 +1721,6 @@ void FunctionAnalyzer::handlePrologue(AsmIterator& insn, uint64_t endPrologueAdd
 		catch (InsnException& e) {
 			printInsnException(e);
 		}
-		fnInfo->DestroyState();
-		fnInfo->DestroyVars();
 	}
 #endif
 
@@ -1695,6 +1750,13 @@ void FunctionAnalyzer::asm2il()
 {
 	AsmIterator insn(asm_insns.FirstPtr(), asm_insns.LastPtr());
 
+	// x64 uses all-stack parameters: many functions read their fixed args from
+	// [fp + 0x10 + 8*i] in the body rather than the prologue, so keep vars and
+	// register state alive across the whole matcher loop (arm64 does not need
+	// this because its args arrive in registers and are consumed in prologue).
+	fnInfo->InitVars();
+	fnInfo->InitState();
+
 	handlePrologue(insn, fnInfo->asmTexts.FirstStackLimitAddress());
 
 	do {
@@ -1719,6 +1781,9 @@ void FunctionAnalyzer::asm2il()
 			++insn;
 		}
 	} while (!insn.IsEnd());
+
+	fnInfo->DestroyState();
+	fnInfo->DestroyVars();
 }
 
 void CodeAnalyzer::asm2il(DartFunction* dartFn, AsmInstructions& asm_insns)

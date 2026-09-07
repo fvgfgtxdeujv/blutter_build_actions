@@ -281,6 +281,16 @@ regress_winapp() {
 	grep -a -h '// semantic:' "$out/asm"/*.dart >"$tmp"
 	assert_ge 'winapp' "$tmp" 'call:DynamicLibrary' 1
 	rm -f "$tmp"
+
+	# gap-4: x64 函数体内 [fp+0x10+8i] 晚绑定为 arg_N（基线 2680，取一半防波动）
+	local argbind
+	argbind="$(grep -ahE "= arg_[0-9]+" "$out"/asm/*.dart | wc -l)"
+	if [ "$argbind" -ge 1300 ]; then
+		PASS=$((PASS + 1))
+	else
+		FAIL=$((FAIL + 1))
+		FAIL_MSG+=("FAIL  winapp: arg_N 晚绑定行数 $argbind < 1300")
+	fi
 	check_semrename "$out" 'winapp'
 	echo "    产物: $out"
 }
