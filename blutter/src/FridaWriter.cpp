@@ -15,9 +15,8 @@
 #define FRIDA_TEMPLATE_DIR "scripts"
 #endif
 
-static std::filesystem::path FindFridaTemplate()
+static std::filesystem::path FindFridaTemplate(const char* name)
 {
-	const char* name = FRIDA_TEMPLATE_DIR "/frida.template.js";
 	std::vector<std::filesystem::path> candidates;
 
 	// 优先按可执行文件所在目录定位，保证产物可在任意路径运行
@@ -27,8 +26,8 @@ static std::filesystem::path FindFridaTemplate()
 	if (len != 0) {
 		exePath[len] = '\0';
 		std::filesystem::path dir = std::filesystem::path(exePath).parent_path();
-		candidates.push_back(dir / FRIDA_TEMPLATE_DIR / "frida.template.js");
-		candidates.push_back(dir.parent_path() / FRIDA_TEMPLATE_DIR / "frida.template.js");
+		candidates.push_back(dir / FRIDA_TEMPLATE_DIR / name);
+		candidates.push_back(dir.parent_path() / FRIDA_TEMPLATE_DIR / name);
 	}
 #else
 	char exePath[PATH_MAX];
@@ -36,28 +35,80 @@ static std::filesystem::path FindFridaTemplate()
 	if (len != -1) {
 		exePath[len] = '\0';
 		std::filesystem::path dir = std::filesystem::path(exePath).parent_path();
-		candidates.push_back(dir / FRIDA_TEMPLATE_DIR / "frida.template.js");
-		candidates.push_back(dir.parent_path() / FRIDA_TEMPLATE_DIR / "frida.template.js");
+		candidates.push_back(dir / FRIDA_TEMPLATE_DIR / name);
+		candidates.push_back(dir.parent_path() / FRIDA_TEMPLATE_DIR / name);
 	}
 #endif
 
 	// 最后回退到当前工作目录
-	candidates.push_back(name);
+	candidates.push_back(std::filesystem::path(FRIDA_TEMPLATE_DIR) / name);
 
 	for (const auto& c : candidates) {
 		if (std::filesystem::exists(c)) {
 			return c;
 		}
 	}
-	return name;
+	return std::filesystem::path(FRIDA_TEMPLATE_DIR) / name;
 }
+
+#ifdef TARGET_ARCH_X64
+// Emit Frida byte patterns ("aa bb cc ...") from the first bytes of known
+// functions so the generated script can locate the AOT image base at runtime.
+static std::string CodeAnchorPattern(uintptr_t addr, size_t len)
+{
+	const uint8_t* p = reinterpret_cast<const uint8_t*>(addr);
+	std::string out;
+	for (size_t i = 0; i < len; i++) {
+		if (i)
+			out += ' ';
+		out += std::format("{:02x}", p[i]);
+	}
+	return out;
+}
+#endif
 
 void FridaWriter::Create(const char* filename)
 {
-	std::filesystem::copy_file(FindFridaTemplate(), filename, std::filesystem::copy_options::overwrite_existing);
+#ifdef TARGET_ARCH_X64
+	// Flutter Windows desktop target: uncompressed tagged pointers, args via stack,
+	// runtime object reading needs no heap base, only code anchors for image discovery
+	std::filesystem::copy_file(FindFridaTemplate("frida.windows.template.js"), filename, std::filesystem::copy_options::overwrite_existing);
+#else
+	std::filesystem::copy_file(FindFridaTemplate("frida.template.js"), filename, std::filesystem::copy_options::overwrite_existing);
+#endif
 
 	std::ofstream of(filename, std::ios_base::app);
 
+#ifdef TARGET_ARCH_X64
+	{
+		std::vector<const DartFunction*> fns;
+		for (const auto& [addr, fn] : app.functions)
+			fns.push_back(fn);
+		std::sort(fns.begin(), fns.end(), [](const DartFunction* a, const DartFunction* b) {
+			return a->Address() < b->Address();
+		});
+
+		std::vector<const DartFunction*> anchors;
+		const size_t want = 8;
+		for (const auto* fn : fns) {
+			if (anchors.size() >= want)
+				break;
+			if (fn->Size() < 32)
+				continue;
+			if (!anchors.empty() && fn->Address() - anchors.back()->Address() < 0x1000)
+				continue;
+			anchors.push_back(fn);
+		}
+
+		of << "const PointerCompressedEnabled = false;\n";
+		of << "const TaggedWordSize = 8;\n";
+		of << "const CodeAnchors = [\n";
+		for (const auto* fn : anchors) {
+			of << std::format("\t[0x{:x}, \"{}\"],\n", fn->Address(), CodeAnchorPattern(fn->MemAddress(), 24));
+		}
+		of << "];\n";
+	}
+#endif
 	of << "const ClassIdTagPos = " << kUntaggedObjectClassIdTagPos << ";\n";
 	of << std::format("const ClassIdTagMask = {:#x};\n", (1 << dart::UntaggedObject::kClassIdTagSize) - 1);
 

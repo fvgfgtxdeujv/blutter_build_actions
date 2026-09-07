@@ -7,6 +7,7 @@
 #   scripts/regression.sh --no-build  # 跳过 ninja，只跑解析与断言
 #   scripts/regression.sh zip         # 只跑 zip 样本
 #   scripts/regression.sh winapp      # 只跑 winapp 样本
+# 环境变量：ZIP_SO/WIN_SO/..._OUT_DIR 覆盖样本路径；CANDIDATE_MIN 调整候选频次阈值（默认 5）
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -24,6 +25,7 @@ WIN_OUT_DIR="${WIN_OUT_DIR:-/tmp/opencode/winapp/out_regress}"
 ZIP_XREF_LINES=93673
 
 # semantic 行内不得出现的黑名单条目（Call/Type/运行时占位）
+# 已配套 semantic_candidates()：回归时反向输出高频低信息量候选，见 blacklist_candidates.txt
 BLACKLIST_PATTERNS=(
 	'\$obfuscated::__unknown_function__'
 	'\$obfuscated::_ffi_resolver_function'
@@ -46,15 +48,64 @@ BLACKLIST_PATTERNS=(
 	'call:_Completer::Bod'
 )
 
+# ---- 黑名单候选统计（黑名单运营半自动化）----
+# 扫描 semantic 行中的带前缀线索，按频次降序；剔除保留白名单、出现次数
+# >=CANDIDATE_MIN 的条目写入样本输出目录 blacklist_candidates.txt，供人工
+# 复核后追加到 blutter/src/semantic_blacklist.txt（信息性报告，不计 PASS/FAIL）
+CANDIDATE_MIN="${CANDIDATE_MIN:-5}"
+KEEP_CLUES=(
+	'field:_port'
+)
+
+semantic_candidates() { # <semantic行文件> <报告输出路径> <样本名>
+	local semfile="$1" report="$2" name="$3"
+	local body kept_join
+	body="$(mktemp)"
+	kept_join="$(IFS='|'; printf '%s' "${KEEP_CLUES[*]}")"
+	grep -a -o -E '(call|field|type|name):[^,"]+' "$semfile" \
+		| sort | uniq -c | sort -rn \
+		| awk -v keep="$kept_join" -v min="$CANDIDATE_MIN" '
+			BEGIN { n = split(keep, k, "|"); for (i = 1; i <= n; i++) kept[k[i]] = 1 }
+			{
+				cnt = $1 + 0
+				line = $0
+				sub(/^[[:space:]]*[0-9]+[[:space:]]+/, "", line)
+				sub(/[[:space:]]+$/, "", line)
+				c = index(line, ":")
+				if (c == 0) next
+				val = substr(line, c + 1)
+				gsub(/[[:space:]]/, "", val)
+				if (val == "") next
+				if (line in kept) next
+				if (cnt < min + 0) next
+				printf "%6d  %s\n", cnt, line
+			}
+		' >"$body"
+	local total
+	total="$(wc -l <"$body")"
+	{
+		echo "# [$name] 高频低信息量黑名单候选（>=${CANDIDATE_MIN} 次，已排除保留名单）"
+		echo "# 复核后将条目加入 blutter/src/semantic_blacklist.txt 并重跑回归"
+		cat "$body"
+	} >"$report"
+	rm -f "$body"
+	if [ "$total" -gt 0 ]; then
+		echo "    [$name] 黑名单候选线索 $total 条（Top5）:"
+		tail -n +3 "$report" | head -5 | sed 's/^/      /'
+	else
+		echo "    [$name] 无新增高频线索候选"
+	fi
+}
+
 PASS=0
 FAIL=0
 FAIL_MSG=()
 
 assert_zero() { # <描述> <模式文件> <pattern>
 	local desc="$1" semfile="$2" pat="$3"
-	if grep -a -q -- "$pat" "$semfile"; then
+	if grep -a -E -q -- "$pat" "$semfile"; then
 		FAIL=$((FAIL + 1))
-		FAIL_MSG+=("FAIL  $desc: 命中 '$pat' ($(grep -a -c -- "$pat" "$semfile"))")
+		FAIL_MSG+=("FAIL  $desc: 命中 '$pat' ($(grep -a -E -c -- "$pat" "$semfile"))")
 	else
 		PASS=$((PASS + 1))
 	fi
@@ -63,7 +114,7 @@ assert_zero() { # <描述> <模式文件> <pattern>
 assert_ge() { # <描述> <文件> <pattern> <最低次数>
 	local desc="$1" file="$2" pat="$3" min="$4"
 	local n
-	n="$(grep -a -c -- "$pat" "$file" 2>/dev/null || true)"
+	n="$(grep -a -E -c -- "$pat" "$file" 2>/dev/null || true)"
 	if [ "$n" -ge "$min" ]; then
 		PASS=$((PASS + 1))
 	else
@@ -146,6 +197,8 @@ check_common() { # <输出目录> <成功标志关键词> <样本名>
 
 	# 业务/字段线索必须保留
 	assert_ge "$name" "$tmp" 'semantic:.*field:_port' 1
+
+	semantic_candidates "$tmp" "$out/blacklist_candidates.txt" "$name"
 	rm -f "$tmp"
 }
 
@@ -207,8 +260,20 @@ regress_winapp() {
 	mkdir -p "$out"
 
 	run_parse "$X64_BIN" "$WIN_SO" "$out" "$log" || return
-	# NO_FRIDA 构建无 Frida 脚本，成功标志用 application assemblies
-	check_common "$out" 'Generating application assemblies' 'winapp'
+	# x64 构建现在生成 Windows 桌面 Frida 脚本（blutter_frida_windows.js）
+	check_common "$out" 'Generating Frida script' 'winapp'
+
+	assert_ge 'winapp Frida 脚本常量' "$out/blutter_frida_windows.js" 'const CodeAnchors' 1
+	assert_ge 'winapp Frida 非压缩标记' "$out/blutter_frida_windows.js" 'const PointerCompressedEnabled = false' 1
+	assert_ge 'winapp Frida 类表' "$out/blutter_frida_windows.js" 'const Classes = \[' 1
+	if command -v node >/dev/null 2>&1; then
+		if node --check "$out/blutter_frida_windows.js" >/dev/null 2>&1; then
+			PASS=$((PASS + 1))
+		else
+			FAIL=$((FAIL + 1))
+			FAIL_MSG+=("FAIL  winapp: blutter_frida_windows.js 语法错误（node --check）")
+		fi
+	fi
 
 	# winapp 是 dart:ffi 重度样本，DynamicLibrary 业务线索必须保留
 	local tmp
@@ -218,6 +283,24 @@ regress_winapp() {
 	rm -f "$tmp"
 	check_semrename "$out" 'winapp'
 	echo "    产物: $out"
+}
+
+# 跨样本稳定候选（用于 all 模式末尾）
+cross_candidates() { # 同时出现在两样本候选报告中的线索才是稳定黑名单候选
+	local zf="$ZIP_OUT_DIR/blacklist_candidates.txt" wf="$WIN_OUT_DIR/blacklist_candidates.txt"
+	[ -f "$zf" ] && [ -f "$wf" ] || return 0
+	local t1 t2 inter
+	t1="$(mktemp)"; t2="$(mktemp)"
+	tail -n +3 "$zf" | awk '{print $2}' | sort -u >"$t1"
+	tail -n +3 "$wf" | awk '{print $2}' | sort -u >"$t2"
+	inter="$(comm -12 "$t1" "$t2")"
+	rm -f "$t1" "$t2"
+	if [ -n "$inter" ]; then
+		echo "==> 跨样本稳定黑名单候选（两样本均高频，复核后入黑名单）:"
+		printf '    %s\n' $inter
+	else
+		echo "==> 无跨样本稳定候选"
+	fi
 }
 
 # ---------------- main ----------------
@@ -249,6 +332,7 @@ case "$TARGET" in
 all)
 	regress_zip
 	regress_winapp
+	cross_candidates
 	;;
 zip) regress_zip ;;
 winapp) regress_winapp ;;

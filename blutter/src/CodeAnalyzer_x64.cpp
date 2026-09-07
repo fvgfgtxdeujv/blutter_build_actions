@@ -13,6 +13,19 @@
 // Target: Flutter Windows AOT app.so (Dart 3.3.x, precompiled, x86-64)
 // IL layer (il.h / VarValue.h / CodeAnalyzer.h) is shared and arch-neutral;
 // A64::Register is an x64 register alias under the A64 namespace.
+//
+// TODO(gap-4): state propagation depth still below arm64. x64 matchers rarely
+//   call State()->SetRegister, so receiver/field typing and value naming are
+//   lost (arm64 binds state in nearly every IL handler). Next steps:
+//   1. bind dst-reg state in pool-load / field-load / call-result matchers
+//   2. type narrowing on class-id / Smi-tag branches (processBranchIfSmiInstr
+//      and instanceof paths feeding VarType)
+//   3. tear-off style patterns: closure entry-point setup via PP then call
+//   4. late param binding: leaf body reads of [fp+0x10+8i] as arg_i. NOTE:
+//      Vars()/State() only live inside the prologue block (Init/Destroy pair
+//      around processPrologueParametersInstr). A first attempt at lazy binding
+//      in processLoadStore segfaulted on Vars()->ValParam(). Prerequisite:
+//      extend AnalyzedFnData vars/state lifetime across the whole asm2il loop.
 // ============================================================================
 
 // ----------------------------------------------------------------------------

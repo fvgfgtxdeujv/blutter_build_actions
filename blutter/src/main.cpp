@@ -57,11 +57,15 @@ int main(int argc, char** argv)
 		dumper.DumpStringCrossRef((outDir / "strings_to_funcs.txt").string().c_str());
 		dumper.Dump4Ida(outDir / "ida_script");
 
-#ifndef NO_FRIDA
-		// Frida 脚本用于 Android 手机端 hook 运行中的 Flutter 应用；
-		// 解析 Windows 桌面 app.so（x64 目标）时无需生成（NO_FRIDA 由构建脚本按目标设置）
 		std::cout << "Generating Frida script\n";
 		FridaWriter fwriter{ app };
+#ifdef TARGET_ARCH_X64
+		// Windows 桌面（x64）目标：frida 附加到运行中的 Windows 应用。
+		// 对象模型按非压缩指针实现，镜像基址由函数锚点探测；基址探测阈值
+		// 与运行时行为需在真实 Windows + frida 环境复核
+		fwriter.Create((outDir / "blutter_frida_windows.js").string().c_str());
+#else
+		// Android 手机端 hook 运行中的 Flutter 应用
 		fwriter.Create((outDir / "blutter_frida.js").string().c_str());
 #endif
 

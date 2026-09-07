@@ -14,7 +14,7 @@
 |------|---------|------|
 | `blutter_dartvm<ver>_android_arm64_22` / `_24` | Linux aarch64 | 解析安卓，按 Ubuntu 22.04 / 24.04 区分（单版本与批量构建产物命名一致） |
 | `blutter_dartvm<ver>_android_arm64_win.exe` | Windows x64 | Windows 下解析 Android ARM64 快照 |
-| `blutter_dartvm<ver>_windows_x64_win.exe` | Windows x64 | Windows 下分析 Flutter Windows 桌面 `app.so`（MVP：对象池 + 汇编注释 + IDA 脚本） |
+| `blutter_dartvm<ver>_windows_x64_win.exe` | Windows x64 | Windows 下分析 Flutter Windows 桌面 `app.so`（对象池 + 汇编注释 + IDA 脚本 + `blutter_frida_windows.js`） |
 
 可选上传内容：
 - **packages 目录**（Dart VM 头文件 + 静态库）：勾选 `Upload packages` 时打包上传（Linux 为 `.zip`，Windows 为 `_win.zip`）
@@ -48,7 +48,7 @@ Actions → **获取待构建 Dart 版本**，运行后从日志末尾复制待�
 
 - `--blacklist <file>`：语义黑名单文件透传给二进制（覆盖内置默认，`$BLUTTER_BLACKLIST` 环境变量同样生效）
 - iOS / macOS 输入直接报错拒绝（`App`/Mach-O 布局、`--dart-version <ver>_ios_*` 均已移除）
-- 解析产物含 `asm/`（带 `// semantic:` 注释）、`objs.txt`/`pp.txt`、`strings_to_funcs.txt` 交叉表、`ida_script/`（`addNames.py` 语义重命名 + `semantic_names.txt` 追踪表）；`blutter_frida.js` 仅 Android 目标生成
+- 解析产物含 `asm/`（带 `// semantic:` 注释）、`objs.txt`/`pp.txt`、`strings_to_funcs.txt` 交叉表、`ida_script/`（`addNames.py` 语义重命名 + `semantic_names.txt` 追踪表）；Frida 动态 dump 脚本按目标生成：Android arm64 → `blutter_frida.js`，Flutter Windows 桌面 x64 → `blutter_frida_windows.js`（非压缩指针、栈参数读取、多锚点 base 发现；锚点阈值与运行时行为需在真实 Windows+Frida 环境复核）
 
 ## 构建目标
 
