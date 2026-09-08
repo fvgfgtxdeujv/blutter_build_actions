@@ -229,10 +229,37 @@ void DartFunction::PrintHead(std::ostream& of) const
 	//of << std::format("    {} /* addr: {:#x}, size: {:#x} */\n", func.ToCString(), ep, code_size);
 	auto zone = dart::Thread::Current()->zone();
 
+	// For obfuscated apps the AOT signature is dropped (Function.signature() is
+	// null or the Function object itself is unreachable), so fall back to the
+	// parameters recovered from code analysis (prologue / call-site binding).
+	const auto* analyzed = GetAnalyzedData();
+	auto hasInferredParams = [&]() { return analyzed != nullptr && !analyzed->params.empty(); };
+	auto printInferredParams = [&](std::ostream& os) {
+		bool first = true;
+		for (size_t i = 0; i < analyzed->params.params.size(); i++) {
+			const auto& p = analyzed->params.params[i];
+			if (!first)
+				os << ", ";
+			first = false;
+			os << "dynamic ";
+			if (p.name == "this")
+				os << "this";
+			else if (!p.name.empty())
+				os << p.name;
+			else
+				os << std::format("arg_{}", i);
+		}
+	};
+
 	if (size_unknown || ptr == dart::Function::null()) {
 		// obfuscated functions have no accessible Function object/signature
 		of << "  ";
-		of << "_ " << name << "(/* No info */) {\n";
+		of << "_ " << name << "(";
+		if (hasInferredParams())
+			printInferredParams(of);
+		else
+			of << "/* No info */";
+		of << ") {\n";
 		of << std::format("    // ** addr: {:#x}, size: {:#x}\n", ep_addr, size);
 		return;
 	}
@@ -277,7 +304,12 @@ void DartFunction::PrintHead(std::ostream& of) const
 	if (sig.IsNull() || size_unknown || ptr == dart::Function::null()) {
 		// for obfuscated functions the signature is not accessible (the Code
 		// object was replaced with the UnknownDartCode stub)
-		of << "_ " << name << "(/* No info */)";
+		of << "_ " << name << "(";
+		if (hasInferredParams())
+			printInferredParams(of);
+		else
+			of << "/* No info */";
+		of << ")";
 	}
 	else {
 		dart::ZoneTextBuffer buffer(zone);

@@ -84,6 +84,7 @@ public:
 
 	void SetAnalyzedData(std::unique_ptr<AnalyzedFnData> data);
 	AnalyzedFnData* GetAnalyzedData() { return analyzedData.get(); }
+	const AnalyzedFnData* GetAnalyzedData() const { return analyzedData.get(); }
 
 	std::string ToCallStatement(const std::vector<std::shared_ptr<VarItem>>& args) const;
 	void PrintHead(std::ostream& of) const;
