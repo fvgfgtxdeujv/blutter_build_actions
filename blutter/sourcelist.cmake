@@ -40,6 +40,8 @@ set(SRCS
     il.cpp
     il.h
     main.cpp
+    PseudoCode.cpp
+    PseudoCode.h
     #pch.cpp
     pch.h
 )

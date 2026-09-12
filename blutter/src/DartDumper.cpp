@@ -13,6 +13,7 @@
 #include "Disassembler.h"
 #include "DartThreadInfo.h"
 #include "CodeAnalyzer.h"
+#include "PseudoCode.h"
 #include <cstdlib>  // std::getenv
 #include <fstream>   // blacklist file loader
 
@@ -996,6 +997,38 @@ void DartDumper::DumpCode(const char* out_dir)
 							of << std::format("{:#x}: {}\n", asmText.addr, &asmText.text[0]);
 						else
 							of << std::format("{:#x}: {}  ; {}\n", asmText.addr, &asmText.text[0], extra);
+					}
+				}
+#endif // NO_CODE_ANALYSIS
+
+#ifndef NO_CODE_ANALYSIS
+				// Pseudo-code view (official blutter TODO "Some pseudo code for
+				// code pattern"): a best-effort Dart-ish statement stream built
+				// from the same IL/asm texts.  Pure comment lines: the asm view
+				// above stays untouched and .dart files remain parseable.
+				if (dartFn->GetAnalyzedData() != nullptr && dartFn->Size() > 0) {
+					auto& asmTexts = dartFn->GetAnalyzedData()->asmTexts.Data();
+					if (!asmTexts.empty()) {
+						std::string pseudo;
+						try {
+#if defined(TARGET_ARCH_X64)
+							constexpr bool kIsX64 = true;
+#else
+							constexpr bool kIsX64 = false;
+#endif
+							pseudo = PseudoCode::Generate(*dartFn, *dartFn->GetAnalyzedData(), kIsX64,
+								[](intptr_t poolOffset) { return std::format("[pp+{:#x}]", poolOffset); });
+						}
+						catch (...) {
+							pseudo.clear(); // never let a view failure kill the dump
+						}
+						if (!pseudo.empty()) {
+							of << "    // pseudo:\n";
+							std::istringstream iss(pseudo);
+							std::string line;
+							while (std::getline(iss, line))
+								of << "    //   " << line << "\n";
+						}
 					}
 				}
 #endif // NO_CODE_ANALYSIS

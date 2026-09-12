@@ -577,6 +577,10 @@ public:
 		return std::format("{} = LoadStaticField({:#x})", dstReg.Name(), fieldOffset);
 	}
 
+	// pseudo-code view support
+	A64::Register DstReg() const { return dstReg; }
+	uint32_t FieldOffset() const { return fieldOffset; }
+
 protected:
 	A64::Register dstReg;
 	uint32_t fieldOffset;
@@ -585,7 +589,7 @@ protected:
 class StoreStaticFieldInstr : public ILInstr {
 public:
 	StoreStaticFieldInstr(AddrRange addrRange, A64::Register valReg, uint32_t fieldOffset)
-		: ILInstr(LoadStaticField, addrRange), valReg(valReg), fieldOffset(fieldOffset) {}
+		: ILInstr(StoreStaticField, addrRange), valReg(valReg), fieldOffset(fieldOffset) {}
 	StoreStaticFieldInstr() = delete;
 	StoreStaticFieldInstr(StoreStaticFieldInstr&&) = delete;
 	StoreStaticFieldInstr& operator=(const StoreStaticFieldInstr&) = delete;
@@ -593,6 +597,10 @@ public:
 	virtual std::string ToString() {
 		return std::format("StoreStaticField({:#x}, {})", fieldOffset, valReg.Name());
 	}
+
+	// pseudo-code view support
+	A64::Register ValReg() const { return valReg; }
+	uint32_t FieldOffset() const { return fieldOffset; }
 
 protected:
 	A64::Register valReg;
