@@ -1006,7 +1006,8 @@ void DartDumper::DumpCode(const char* out_dir)
 				// code pattern"): a best-effort Dart-ish statement stream built
 				// from the same IL/asm texts.  Pure comment lines: the asm view
 				// above stays untouched and .dart files remain parseable.
-				if (dartFn->GetAnalyzedData() != nullptr && dartFn->Size() > 0) {
+				if (PseudoCode::IsEnabled() &&
+					dartFn->GetAnalyzedData() != nullptr && dartFn->Size() > 0) {
 					auto& asmTexts = dartFn->GetAnalyzedData()->asmTexts.Data();
 					if (!asmTexts.empty()) {
 						std::string pseudo;

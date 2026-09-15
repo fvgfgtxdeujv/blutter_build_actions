@@ -47,6 +47,7 @@ Actions → **获取待构建 Dart 版本**，运行后从日志末尾复制待�
 精简运行包，解压后运行 `python3 blutter.py <apk/lib目录/app目录或app.so> <输出目录>`。自动检测目标类型（Android / Flutter Windows 桌面）与 Dart 版本，从仓库 Releases 下载匹配二进制（Linux 自动识别 `_22`/`_24`，Windows 下载 `_win.exe`，Windows 下首次运行自动补齐三个运行 dll）。下载源按国内/国外自动选择（Gitee 镜像 / GitHub 双源，失败自动切换），也可手动下载二进制放入 `$HOME/blutter/bin/`。
 
 - `--blacklist <file>`：语义黑名单文件透传给二进制（覆盖内置默认，`$BLUTTER_BLACKLIST` 环境变量同样生效）
+- `-p` / `--pseudo`：为 `asm/` 输出追加 `// pseudo:` 伪代码注释段（默认关闭；透传给底层二进制，与 `--blacklist` 相同的传递方式）
 - iOS / macOS 输入直接报错拒绝（`App`/Mach-O 布局、`--dart-version <ver>_ios_*` 均已移除）
 - 解析产物含 `asm/`（带 `// semantic:` 注释）、`objs.txt`/`pp.txt`、`strings_to_funcs.txt` 交叉表、`ida_script/`（`addNames.py` 语义重命名 + `semantic_names.txt` 追踪表）；Frida 动态 dump 脚本按目标生成：Android arm64 → `blutter_frida.js`，Flutter Windows 桌面 x64 → `blutter_frida_windows.js`（非压缩指针、栈参数读取、多锚点 base 发现；锚点阈值与运行时行为需在真实 Windows+Frida 环境复核）
 
@@ -79,7 +80,24 @@ name:dart_ui
 blutter_dartvm3.3.4_android_arm64 --blacklist /path/to/my.txt -i libapp.so -o out
 ```
 
+## 伪代码输出（可选：`-p` / `--pseudo`）
+
+默认不生成伪代码，`asm/*.dart` 与经典反汇编输出逐字节一致。传入 `-p`（或 `--pseudo`）后，blutter 会在每个函数的汇编体之后追加一段 `// pseudo:` 注释，给出该函数的最佳努力（best-effort）语义视图：
+
+- 丢弃入口/出口样板（EnterFrame / AllocStack / CheckStackOverflow 等）
+- 寄存器数据流折叠为表达式（`obj->field_x`、`array[idx]`、`[fp-0x8]` 槽位、`[SP]` 调用参数）
+- 字段/数组读写还原为 `obj->field_x = v;` 形式的语句
+- 调用点收集栈参数并折叠为 `f(...)` / `return f(...)`
+- 条件/无条件跳转标注为 `// if (...) goto 0x...` / `// goto 0x...`
+
+该视图为增量注释：不改动原有汇编行，IL 未识别的指令保留 `// 0x... <asm>` 参考行，信息不丢失；x64 与 arm64 使用同一套折叠规则（按架构适配操作数文本）。表达式长度有上限，避免个别函数出现指数级膨胀。
+
+```bash
+# 直接调用二进制：追加伪代码段
+blutter_dartvm3.3.4_android_arm64 -i libapp.so -o out -p
+```
+
 ## 其他
 
 - **版本兼容**：与官方 blutter 支持的 Dart 版本一致
-- **输出目录**：运行 blutter 后生成 `asm/`（反汇编）、`objs.txt` / `pp.txt`（Object Pool 转储）；`blutter_frida.js`（Frida 脚本，Android 手机端 hook 用）仅解析安卓的目标生成，解析 Windows 桌面 `app.so` 的目标不生成
+- **输出目录**：运行 blutter 后生成 `asm/`（反汇编；加 `-p` 时每个函数另含 `// pseudo:` 伪代码注释段）、`objs.txt` / `pp.txt`（Object Pool 转储）；`blutter_frida.js`（Frida 脚本，Android 手机端 hook 用）仅解析安卓的目标生成，解析 Windows 桌面 `app.so` 的目标不生成

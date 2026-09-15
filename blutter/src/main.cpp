@@ -3,6 +3,7 @@
 #include "DartDumper.h"
 #include "CodeAnalyzer.h"
 #include "FridaWriter.h"
+#include "PseudoCode.h"
 #include "args.hxx"
 #include <filesystem>
 
@@ -14,11 +15,14 @@ int main(int argc, char** argv)
 	args::ValueFlag<std::string> infile(reqGrp, "infile", "libapp file", { 'i', "in" });
 	args::ValueFlag<std::string> outdir(reqGrp, "outdir", "out path", { 'o', "out"});
 	args::ValueFlag<std::string> blacklist(parser, "blacklist", "semantic blacklist file (default: blutter/src/semantic_blacklist.txt)", { 'b', "blacklist"});
+	args::Flag pseudo(parser, "pseudo", "also emit pseudo-code comment blocks in asm output (off by default)", { 'p', "pseudo" });
 
 	try {
 		parser.ParseCLI(argc, argv);
 		if (blacklist)
 			SetSemanticBlacklistFile(args::get(blacklist));
+		if (pseudo)
+			PseudoCode::SetEnabled(true);
 
 		auto& libappPath = args::get(infile);
 

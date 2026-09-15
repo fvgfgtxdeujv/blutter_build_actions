@@ -138,3 +138,9 @@ Entries discovered by the Agent during task execution should follow this format:
   - 伪代码表达式会指数级膨胀（寄存器表达式互相嵌套替换）：pXo.dart 一度从 817KB 涨到 50MB、单行最长 739KB，并伴随内存压力下的崩溃。setReg/writeFpSlot/writeSpArg 已对单表达式限长 256 字符，expandText 对展开结果限长 8192 字符；新增表达式折叠时勿绕开 capExpr
   - 校验伪代码是否损坏的可靠特征：以 `    //   `（4空格+//+3空格）开头且**不是** `    //     `（asm 行前缀）的行内出现 NUL/控制字节。注意 asm 视图里池字符串字面量本身含 UTF-8 与 ANSI 转义（如 "\x1b[34m"），属正常，勿误判
   - 回归门禁：bash scripts/regression.sh all（PASS=66）；零漂移用 python3 /tmp/opencode/strip_pseudo.py <base_asm> <out_regress_asm>（drifted=0）
+
+[User Instruction Summary]
+- Date: 2026-09-15
+- Context: 用户要求伪代码改为按需输出
+- Instructions:
+  - 伪代码（`// pseudo:` 段）默认不输出，asm/*.dart 与经典 dump 逐字节一致；仅在命令行传入 `-p` / `--pseudo` 时才在函数体后追加伪代码段。开关实现：PseudoCode::SetEnabled/IsEnabled（全局默认 false），main.cpp 的 args::Flag pseudo 触发，DartDumper 的伪代码生成点用 PseudoCode::IsEnabled() 守卫

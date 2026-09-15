@@ -24,12 +24,17 @@ namespace PseudoCode {
 // DartDumper::getPoolObjectDescription() would force lazy type/object
 // materialization this best-effort view does not need, so pool slots are
 // rendered as a plain [pp+off] reference instead.
-// isX64 selects the asm-level mov/jcc folding rules (x64 Capstone text
-// layout); ARM64 keeps IL-level folding only and falls back to annotated raw
-// lines for instructions the analyzer did not lift.
+// isX64 selects the asm-level mov/jcc folding rules (x64 Capstone Intel text
+// layout vs. ARM64 register/operand layout).
 std::string Generate(const DartFunction& dartFn,
 	AnalyzedFnData& analyzedData,
 	bool isX64,
 	const std::function<std::string(intptr_t)>& poolDesc);
+
+// Feature gate.  The pseudo-code view is opt-in: it is only emitted when the
+// user passes the -p/--pseudo command-line flag, so the default asm output is
+// byte-identical to the classic dump.
+void SetEnabled(bool enabled);
+bool IsEnabled();
 
 } // namespace PseudoCode
