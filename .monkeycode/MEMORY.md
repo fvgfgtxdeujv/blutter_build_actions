@@ -128,3 +128,13 @@ Entries discovered by the Agent during task execution should follow this format:
 - Context: 用户决定项目目标形态范围时明确
 - Instructions:
   - 本项目不适配 iOS 与 macOS（用户不玩）。已删除所有 iOS/Mac 相关代码：ElfHelper.cpp 的 Mach-O 分支、scripts/CMakeLists.txt 的 ios TARGET_OS 与 Darwin/brew ICU 分支、blutter/CMakeLists.txt 的 APPLE 宿主编译分支；TARGET_OS 仅剩 android/windows/linux。后续新功能、CI 矩阵、构建目标一律不引入 iOS/macOS，也不用拿官方 iOS/Mac 能力做对比基准。
+
+[Project Knowledge Summary]
+- Date: 2026-09-15
+- Context: Discovered by Agent while implementing arm64 pseudo-code flow folding (blutter/src/PseudoCode.cpp)
+- Category: Troubleshooting & Debugging
+- Instructions:
+  - 本构建环境的 libc++（clang++-16 + -stdlib=libc++ -fexperimental-library + PCH）下，PseudoCode.cpp 中**多参数 std::format（含 2 个及以上参数、尤其字符串）会产出内存垃圾**：输出行被随机栈/堆字节夹杂，表现为 .dart 行内出现 NUL 与 0x7f/0x55 指针，且每次运行字节不同。已把 PseudoCode.cpp 内所有多参 std::format 改为字符串拼接（数值格式化保留单参 std::format 或 std::to_string），此后 arm64/x64 伪代码坏行均为 0。新增格式化代码请沿用拼接写法，勿再用多参 std::format
+  - 伪代码表达式会指数级膨胀（寄存器表达式互相嵌套替换）：pXo.dart 一度从 817KB 涨到 50MB、单行最长 739KB，并伴随内存压力下的崩溃。setReg/writeFpSlot/writeSpArg 已对单表达式限长 256 字符，expandText 对展开结果限长 8192 字符；新增表达式折叠时勿绕开 capExpr
+  - 校验伪代码是否损坏的可靠特征：以 `    //   `（4空格+//+3空格）开头且**不是** `    //     `（asm 行前缀）的行内出现 NUL/控制字节。注意 asm 视图里池字符串字面量本身含 UTF-8 与 ANSI 转义（如 "\x1b[34m"），属正常，勿误判
+  - 回归门禁：bash scripts/regression.sh all（PASS=66）；零漂移用 python3 /tmp/opencode/strip_pseudo.py <base_asm> <out_regress_asm>（drifted=0）

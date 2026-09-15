@@ -36,6 +36,9 @@ bool isRegToken(const string& t)
 		return false;
 	if (t == "TMP" || t == "ARGS" || t == "PP" || t == "THR" || t == "CODE")
 		return true;
+	// arm64 special registers (the analyzer rewrites x15/x22/x26..x30 to these)
+	if (t == "SP" || t == "fp" || t == "lr" || t == "NULL" || t == "HEAP")
+		return true;
 	if (t.size() >= 2) {
 		const char c0 = t[0];
 		if (c0 == 'x' || c0 == 'w') {
@@ -61,16 +64,46 @@ bool isRegToken(const string& t)
 	for (const auto* r : kGp)
 		if (t == r)
 			return true;
+	// arm64 IL register naming: rN (the asm xN/wN are normalised to this)
+	if (t.size() >= 2 && t.size() <= 3 && t[0] == 'r') {
+		bool allDigit = true;
+		for (size_t i = 1; i < t.size(); i++)
+			if (!isdigit((unsigned char)t[i]))
+				allDigit = false;
+		if (allDigit)
+			return true;
+	}
+	// arm64 FP/SIMD registers: sN dN hN qN vN (and byte lane groups bN)
+	if (t.size() >= 2 && t.size() <= 4) {
+		char c0 = t[0];
+		if (c0 == 's' || c0 == 'd' || c0 == 'h' || c0 == 'q' || c0 == 'v' || c0 == 'b') {
+			bool allDigit = true;
+			for (size_t i = 1; i < t.size(); i++)
+				if (!isdigit((unsigned char)t[i]))
+					allDigit = false;
+			if (allDigit)
+				return true;
+		}
+	}
 	return false;
 }
 
-// Split a Capstone x64 operand text on the top-level commas (no nesting).
+// Split an operand text on top-level commas.  Commas inside a memory operand
+// are protected: arm64 writes "[x1, #0x10]" where the comma is not an operand
+// separator.
 vector<string> splitTopLevel(const string& s)
 {
 	vector<string> parts;
 	string cur;
+	int depth = 0;
 	for (char c : s) {
-		if (c == ',') {
+		if (c == '[')
+			depth++;
+		else if (c == ']') {
+			if (depth > 0)
+				depth--;
+		}
+		if (c == ',' && depth == 0) {
 			if (!cur.empty())
 				parts.push_back(cur);
 			cur.clear();
@@ -100,7 +133,10 @@ struct MemRef {
 	bool hasDisp{ false };
 };
 
-// parse "qword ptr [fp - 0x88]" / "[rax + 0x10]" style operand into MemRef
+// Parse a memory operand of either architecture into base/disp:
+//   x64   : "qword ptr [fp - 0x88]", "[rcx + 0x10]", "[rax]"
+//   arm64 : "[fp, #-8]", "[x0, #0x10]", "[x1]" (post-index "#8" ignored)
+// Register-offset / scaled / indexed forms are rejected (caller falls back raw).
 MemRef parseMemRef(const string& raw)
 {
 	MemRef m;
@@ -111,36 +147,42 @@ MemRef parseMemRef(const string& raw)
 	if (close == string::npos)
 		return m;
 	string inner = trimStr(raw.substr(open + 1, close - open - 1));
-	// inner: "<base> [+/- 0x...]" possibly with an index "* ..." we ignore
-	// x64 winapp body loads are plain [base + disp]; keep it simple.
+	// normalise arm64 separators and the immediate marker: "fp, #-8" -> "fp  -8"
+	string norm;
+	for (char c : inner) {
+		if (c == ',')
+			norm += ' ';
+		else if (c == '#')
+			continue;
+		else
+			norm += c;
+	}
+	inner = trimStr(norm);
 	size_t sp = inner.find_first_of(" \t");
 	if (sp == string::npos) {
 		m.base = inner;
+		m.valid = !m.base.empty();
+		return m;
 	}
-	else {
-		m.base = inner.substr(0, sp);
-		string rest = trimStr(inner.substr(sp));
-		if (!rest.empty()) {
-			// forms: "+ 0x10" / "- 0x8" / "* 4 + 0x18" (indexed: unsupported -> raw)
-			if (rest[0] == '+' || rest[0] == '-') {
-				char sign = rest[0];
-				string num = trimStr(rest.substr(1));
-				// capstone hex has no 0x prefix handling issue; parse both
-				char* end = nullptr;
-				long long v = strtoll(num.c_str(), &end, 0);
-				if (end && *end == '\0' && end != num.c_str()) {
-					m.disp = sign == '-' ? -v : v;
-					m.hasDisp = true;
-				}
-				else {
-					return m; // unparsable disp -> leave invalid-ish (raw fallback)
-				}
-			}
-			else {
-				return m; // indexed or scaled form: not handled by v1 folding
-			}
-		}
+	m.base = inner.substr(0, sp);
+	string rest = trimStr(inner.substr(sp));
+	bool neg = false;
+	size_t i = 0;
+	if (!rest.empty() && (rest[0] == '+' || rest[0] == '-')) {
+		neg = rest[0] == '-';
+		i = 1;
 	}
+	while (i < rest.size() && (rest[i] == ' ' || rest[i] == '\t'))
+		i++;
+	if (i >= rest.size())
+		return m; // e.g. register offset "[x0, x1]"
+	string num = rest.substr(i);
+	char* end = nullptr;
+	long long v = strtoll(num.c_str(), &end, 0);
+	if (end == nullptr || end == num.c_str() || *end != '\0')
+		return m; // indexed / scaled / symbolic form
+	m.disp = neg ? -v : v;
+	m.hasDisp = true;
 	m.valid = true;
 	return m;
 }
@@ -158,6 +200,14 @@ public:
 		if (asmTexts.empty())
 			return "";
 		(void)dartFn_; // kept for future use (e.g. static/async hints)
+
+		// address ranges the IL already lifts: asm data-flow folding is skipped
+		// there so the (better) IL expressions are not clobbered by asm
+		ilRanges_.clear();
+		ilRanges_.reserve(il_insns.size());
+		for (auto& p : il_insns)
+			ilRanges_.emplace_back(p->Start(), p->End());
+		std::sort(ilRanges_.begin(), ilRanges_.end());
 
 		auto il_itr = il_insns.begin();
 		const auto il_end = il_insns.end();
@@ -217,6 +267,7 @@ private:
 	unordered_map<int64_t, string> fpSlot_; // fp-relative slot (negative) -> expr
 	vector<pair<int64_t, string>> spArgs_;  // [SP + off] slots written before a call
 	bool swallowNextCond_{ false };         // next jcc belongs to the overflow slow path
+	vector<pair<uint64_t, uint64_t>> ilRanges_; // [start,end) lifted by the IL layer
 
 	void line(const string& s) { lines_.push_back(s); }
 
@@ -228,6 +279,25 @@ private:
 			return true;
 		return baseExpr.rfind("THR", 0) == 0 || baseExpr.rfind("PP", 0) == 0 ||
 			baseExpr.rfind("CODE", 0) == 0;
+	}
+
+	// true when an IL instruction already lifted the asm at this address
+	bool isIlCovered(uint64_t addr) const
+	{
+		if (ilRanges_.empty())
+			return false;
+		size_t lo = 0, hi = ilRanges_.size();
+		while (lo < hi) {
+			size_t mid = (lo + hi) / 2;
+			if (ilRanges_[mid].first <= addr)
+				lo = mid + 1;
+			else
+				hi = mid;
+		}
+		if (lo == 0)
+			return false;
+		auto& r = ilRanges_[lo - 1];
+		return addr >= r.first && addr < r.second;
 	}
 
 	string replacePoolRef(const string& text, intptr_t /*poolOffset*/)
@@ -306,7 +376,12 @@ private:
 
 	string expandText(const string& text)
 	{
-		// word-boundary replace of register tokens by their current expression
+		// word-boundary replace of register tokens by their current expression.
+		// Expressions nest, so a self-referential fold (e.g. `add r1, r1, r1`)
+		// can blow up exponentially; both the stored value and the expanded
+		// result are capped to keep the view readable and the dump bounded.
+		constexpr size_t kMaxExprLen = 256;
+		constexpr size_t kMaxTextLen = 8192;
 		string out = text;
 		// build candidates from the map first (longest keys win to avoid partials)
 		vector<string> keys;
@@ -324,6 +399,8 @@ private:
 				if (l && r) {
 					out.replace(pos, needle.size(), regExpr_[k]);
 					pos += regExpr_[k].size();
+					if (out.size() > kMaxTextLen)
+						return out.substr(0, kMaxTextLen) + "...";
 				}
 				else {
 					pos += needle.size();
@@ -336,7 +413,15 @@ private:
 	// ---------------------------------------------------------------------
 	// value plumbing
 	// ---------------------------------------------------------------------
-	void setReg(const string& reg, const string& expr) { regExpr_[reg] = expr; }
+	void setReg(const string& reg, const string& expr) { regExpr_[reg] = capExpr(expr); }
+
+	static string capExpr(const string& expr)
+	{
+		constexpr size_t kMaxExprLen = 256;
+		if (expr.size() <= kMaxExprLen)
+			return expr;
+		return expr.substr(0, kMaxExprLen) + "...";
+	}
 
 	string readFpSlot(int64_t disp)
 	{
@@ -360,11 +445,12 @@ private:
 		return std::format("fp{:#x}", disp);
 	}
 
-	void writeFpSlot(int64_t disp, const string& expr) { fpSlot_[disp] = expr; }
+	void writeFpSlot(int64_t disp, const string& expr) { fpSlot_[disp] = capExpr(expr); }
 
 	// [SP + off] argument slots are collected but only flushed at a call.
-	void writeSpArg(int64_t off, const string& expr)
+	void writeSpArg(int64_t off, const string& exprIn)
 	{
+		string expr = capExpr(exprIn);
 		for (auto& [o, v] : spArgs_) {
 			if (o == off) {
 				v = expr;
@@ -428,7 +514,7 @@ private:
 				line("// " + il->ToString()); // VM-internal field write
 				return;
 			}
-			line(std::format("{}->field_{:x} = {}", obj, v->offset, val));
+			line(obj + "->field_" + std::format("{:x}", v->offset) + " = " + val);
 			return;
 		}
 		case ILInstr::LoadArrayElement: {
@@ -475,7 +561,7 @@ private:
 		case ILInstr::TestType: {
 			auto* v = static_cast<TestTypeInstr*>(il);
 			string src = expandToken(v->srcReg.Name());
-			line(std::format("// {} is {} (TestType)", src, v->typeName));
+			line("// " + src + " is " + v->typeName + " (TestType)");
 			return;
 		}
 		case ILInstr::BoxInt64: {
@@ -495,7 +581,8 @@ private:
 		}
 		case ILInstr::StoreStaticField: {
 			auto* v = static_cast<StoreStaticFieldInstr*>(il);
-			line(std::format("static({:#x}) = {};", v->FieldOffset(), expandToken(v->ValReg().Name())));
+			line("static(" + std::format("{:#x}", v->FieldOffset()) + ") = " +
+				expandToken(v->ValReg().Name()) + ";");
 			inPrologue_ = false;
 			return;
 		}
@@ -591,12 +678,7 @@ private:
 		}
 
 		if (!isX64_) {
-			// ARM64: only annotate control flow; everything else was lifted to IL
-			// or is left as raw line.
-			if (mnem[0] == 'b' || mnem == "cbz" || mnem == "cbnz" || mnem == "tbz" || mnem == "tbnz")
-				line(std::format("// 0x{:x}: {} (branch) -> {}", at.addr, mnem, ops));
-			else if (at.dataType == AsmText::PoolOffset)
-				line(std::format("// 0x{:x}: [pp+{:#x}]", at.addr, at.poolOffset));
+			processARM64Asm(at, mnem, ops, isIlCovered(at.addr));
 			return;
 		}
 
@@ -620,7 +702,7 @@ private:
 			if (!pendingCond_.empty()) {
 				cond = " if (" + buildCondExpr(mnem) + ")";
 			}
-			line(std::format("//{} goto {}", cond, ops));
+			line("//" + cond + " goto " + ops);
 			pendingCond_.clear();
 			inPrologue_ = false;
 			return;
@@ -643,7 +725,7 @@ private:
 		}
 		// whatever remains: keep a raw reference line (info never lost)
 		if (!inPrologue_ && isMeaningfulRaw(mnem))
-			line(std::format("// {} {}", mnem, expandText(ops)));
+			line("// " + mnem + " " + expandText(ops));
 	}
 
 	bool isCondJmp(const string& m)
@@ -692,6 +774,104 @@ private:
 		return lhs + " " + op + " " + rhs;
 	}
 
+	// ---------------------------------------------------------------------
+	// architecture-neutral move semantics (shared by x64 and arm64 asm folds)
+	// ---------------------------------------------------------------------
+	// store `val` into a parsed memory reference
+	void emitStoreMem(const MemRef& m, const string& val)
+	{
+		if (m.base == "fp")
+			writeFpSlot(m.disp, val);
+		else if (m.base == "SP")
+			writeSpArg(m.disp, val);
+		else {
+			string bexpr = expandToken(m.base);
+			if (isInternalBase(bexpr))
+				return; // field-table / pool / thread internal write (IL covers it)
+			line(bexpr + "[" + hexOffset(m.disp) + "] = " + val);
+		}
+		inPrologue_ = false;
+	}
+
+	enum class SrcKind { Ok, Internal, Invalid };
+
+	// Evaluate a source operand text (register / immediate / memory) to a
+	// pseudo expression.  Internal means "no application value".
+	SrcKind evalSourceValue(const string& src, string& out)
+	{
+		if (!src.empty() && src[0] == '[') {
+			MemRef m = parseMemRef(src);
+			if (!m.valid)
+				return SrcKind::Invalid;
+			if (m.base == "fp")
+				out = readFpSlot(m.disp);
+			else if (m.base == "PP")
+				out = std::format("[pp{}]", hexOffset(m.disp));
+			else if (m.base == "THR")
+				return SrcKind::Internal; // thread-internal read: null/limit/dispatch
+			else if (m.base == "CODE")
+				out = std::format("CODE{}", hexOffset(m.disp));
+			else {
+				string bexpr = expandToken(m.base);
+				if (isInternalBase(bexpr))
+					return SrcKind::Internal; // impl detail of an IL-lifted access
+				// arm64 pool addressing: "add rx, PP, #hi, lsl #12" then
+				// "ldr rx, [rx, #lo]" folds to a single [pp+off] reference.
+				int64_t poolBase = 0;
+				if (parsePoolPtr(bexpr, poolBase)) {
+					out = std::format("[pp{}]", hexOffset(poolBase + m.disp));
+					return SrcKind::Ok;
+				}
+				if (m.disp == -1)
+					out = bexpr + "->[-1]"; // class-id / header tag reads
+				else
+					out = bexpr + std::format("[{}]", hexOffset(m.disp));
+			}
+			return SrcKind::Ok;
+		}
+		out = expandToken(src);
+		return SrcKind::Ok;
+	}
+
+	// "PP" or "PP+0x4000" -> offset; used to fold arm64 pool addressing
+	bool parsePoolPtr(const string& expr, int64_t& off)
+	{
+		if (expr == "PP") {
+			off = 0;
+			return true;
+		}
+		if (expr.rfind("PP+", 0) == 0) {
+			char* end = nullptr;
+			long long v = strtoll(expr.c_str() + 3, &end, 0);
+			if (end != nullptr && end != expr.c_str() + 3 && *end == '\0') {
+				off = v;
+				return true;
+			}
+		}
+		return false;
+	}
+
+	void emitLoadReg(const string& dst, const string& src)
+	{
+		if (!isRegToken(dst)) {
+			line("// " + dst + " = " + src);
+			return;
+		}
+		string val;
+		switch (evalSourceValue(src, val)) {
+		case SrcKind::Ok:
+			setReg(dst, val);
+			inPrologue_ = false;
+			return;
+		case SrcKind::Internal:
+			return; // no application value
+		case SrcKind::Invalid:
+		default:
+			line("// " + dst + " = " + src);
+			return;
+		}
+	}
+
 	// x64 Capstone Intel mov parsing.  Handles (all with optional size prefix):
 	//   mov reg, reg | mov reg, imm | mov reg, [mem] | mov [mem], reg
 	// where [mem] is [base +/- 0x..] with base in fp/SP/PP/THR/CODE or a reg.
@@ -724,71 +904,352 @@ private:
 			// memory store
 			MemRef m = parseMemRef(dst);
 			if (!m.valid) {
-				line(std::format("// mov {} = {}", dst, src));
+				line("// mov " + dst + " = " + src);
 				return;
 			}
-			string val = expandToken(src);
-			if (m.base == "fp")
-				writeFpSlot(m.disp, val);
-			else if (m.base == "SP")
-				writeSpArg(m.disp, val);
-			else {
-				string bexpr = expandToken(m.base);
-				if (isInternalBase(bexpr))
-					return; // field-table / pool / thread internal writes (IL covers them)
-				line(std::format("{}[{}] = {}", bexpr, hexOffset(m.disp), val));
+			emitStoreMem(m, expandToken(src));
+			return;
+		}
+		emitLoadReg(dst, src);
+	}
+
+	// ---------------------------------------------------------------------
+	// arm64 asm folding
+	// ---------------------------------------------------------------------
+	// The analyzer rewrites x15/x22/x26..x30 to SP/NULL/THR/PP/HEAP/fp/lr but
+	// leaves regular registers as xN/wN, while the IL layer names them rN.
+	// Collapse xN/wN -> rN and drop '#' so both layers share one key space.
+	static string normalizeArm64Text(const string& text)
+	{
+		string out;
+		out.reserve(text.size());
+		for (size_t i = 0; i < text.size();) {
+			char c = text[i];
+			bool boundary = out.empty() || out.back() == ' ' || out.back() == '[' ||
+				out.back() == ',' || out.back() == ']' || out.back() == '!';
+			if (boundary && (c == 'x' || c == 'w') && i + 1 < text.size()) {
+				size_t j = i + 1;
+				while (j < text.size() && isdigit((unsigned char)text[j]))
+					j++;
+				bool identEnd = j >= text.size() || !(isalnum((unsigned char)text[j]) || text[j] == '_');
+				if (j > i + 1 && identEnd) {
+					out += 'r';
+					out.append(text, i + 1, j - (i + 1));
+					i = j;
+					continue;
+				}
+				// zero register: xzr / wzr -> NULL (matches the analyzer alias)
+				if (j == i + 1 && i + 3 <= text.size() && text.compare(i + 1, 2, "zr") == 0) {
+					out += "NULL";
+					i += 3;
+					continue;
+				}
 			}
+			if (c == '#') {
+				i++;
+				continue;
+			}
+			out += c;
+			i++;
+		}
+		return out;
+	}
+
+	bool parseImm(const string& tok, int64_t& out)
+	{
+		string t = trimStr(tok);
+		if (t.empty())
+			return false;
+		if (t[0] == '#')
+			t = t.substr(1);
+		char* end = nullptr;
+		long long v = strtoll(t.c_str(), &end, 0);
+		if (end == nullptr || end == t.c_str() || *end != '\0')
+			return false;
+		out = v;
+		return true;
+	}
+
+	// parts[immIdx] is an immediate, optionally followed by "lsl #n"
+	bool parseImmShift(const vector<string>& parts, size_t immIdx, int64_t& imm, int& shift)
+	{
+		shift = 0;
+		if (immIdx >= parts.size() || !parseImm(parts[immIdx], imm))
+			return false;
+		if (immIdx + 2 < parts.size() && trimStr(parts[immIdx + 1]) == "lsl") {
+			int64_t s = 0;
+			if (parseImm(parts[immIdx + 2], s) && s >= 0 && s < 64)
+				shift = (int)s;
+		}
+		return true;
+	}
+
+	void rawLine(const string& mnem, const string& ops)
+	{
+		if (!inPrologue_ && isMeaningfulRaw(mnem))
+			line("// " + mnem + " " + expandText(ops));
+	}
+
+	void processARM64MovImm(const string& mnem, const string& ops)
+	{
+		auto parts = splitTopLevel(ops);
+		if (parts.size() < 2) {
+			rawLine(mnem, ops);
+			return;
+		}
+		string dst = trimStr(parts[0]);
+		if (mnem == "movk") {
+			rawLine(mnem, ops); // bit insert into an existing value: keep raw
+			return;
+		}
+		int64_t imm = 0;
+		int shift = 0;
+		if (!parseImmShift(parts, 1, imm, shift)) {
+			rawLine(mnem, ops);
+			return;
+		}
+		uint64_t v = (uint64_t)imm << shift;
+		if (mnem == "movn")
+			v = ~v;
+		setReg(dst, std::format("{:#x}", v));
+		inPrologue_ = false;
+	}
+
+	// add/sub of an immediate or a register; PP arithmetic is tracked so a
+	// following load folds into a single [pp+off] reference.
+	bool processARM64AddSub(const string& mnem, const string& ops)
+	{
+		auto parts = splitTopLevel(ops);
+		if (parts.size() < 3)
+			return false;
+		string dst = trimStr(parts[0]);
+		string lhs = trimStr(parts[1]);
+		string lexpr = expandToken(lhs);
+		int64_t poolBase = 0;
+		bool isPool = parsePoolPtr(lexpr, poolBase);
+
+		int64_t imm = 0;
+		int shift = 0;
+		if (parseImmShift(parts, 2, imm, shift)) {
+			if (shift > 0)
+				imm <<= shift;
+			if (mnem == "sub")
+				imm = -imm;
+			if (isPool) {
+				int64_t total = poolBase + imm;
+				setReg(dst, total == 0 ? string("PP") : std::format("PP+{:#x}", total));
+				inPrologue_ = false;
+				return true;
+			}
+			if (isRegToken(lhs)) {
+				if (imm == 0)
+					setReg(dst, lexpr);
+				else if (imm > 0)
+					setReg(dst, lexpr + " + " + std::format("{:#x}", imm));
+				else
+					setReg(dst, lexpr + " - " + std::format("{:#x}", -imm));
+				inPrologue_ = false;
+				return true;
+			}
+			return false;
+		}
+		// register + register (optionally shifted: "..., sxtw #2")
+		if (isRegToken(lhs) && isRegToken(trimStr(parts[2]))) {
+			if (trimStr(parts[2]) == "HEAP") {
+				// "add rx, rs, HEAP, lsl #32": tagged-pointer decompression;
+				// the value is the same pointer, keep the cleaner prior form
+				setReg(dst, lexpr);
+				inPrologue_ = false;
+				return true;
+			}
+			string rexpr = expandToken(trimStr(parts[2]));
+			int shift = 0;
+			if (parts.size() >= 5) {
+				string kw = trimStr(parts[3]);
+				int64_t s = 0;
+				if ((kw == "lsl" || kw == "lsr" || kw == "asr" || kw == "sxtw" ||
+						kw == "uxtw" || kw == "sxtx" || kw == "uxtx") && parseImm(parts[4], s))
+					shift = (int)s;
+			}
+			if (shift > 0)
+				rexpr = "(" + rexpr + " << " + std::to_string(shift) + ")";
+			setReg(dst, lexpr + " + " + rexpr);
+			inPrologue_ = false;
+			return true;
+		}
+		return false;
+	}
+
+	bool arm64CondToX64(const string& cond, string& out)
+	{
+		static const struct { const char* a; const char* x; } kMap[] = {
+			{ "eq", "je" }, { "ne", "jne" }, { "cs", "jae" }, { "hs", "jae" },
+			{ "cc", "jb" }, { "lo", "jb" }, { "mi", "js" }, { "pl", "jns" },
+			{ "vs", "jo" }, { "vc", "jno" }, { "hi", "ja" }, { "ls", "jbe" },
+			{ "ge", "jge" }, { "lt", "jl" }, { "gt", "jg" }, { "le", "jle" },
+		};
+		for (auto& e : kMap)
+			if (cond == e.a) {
+				out = e.x;
+				return true;
+			}
+		return false;
+	}
+
+	void processARM64CondBranch(const string& cond, const string& ops)
+	{
+		string x64cond;
+		if (!arm64CondToX64(cond, x64cond)) {
+			line("// b." + cond + " " + ops);
+			return;
+		}
+		if (swallowNextCond_) {
+			// overflow-check slow path branch: not interesting to a reader
+			swallowNextCond_ = false;
+			return;
+		}
+		string cexpr;
+		if (!pendingCond_.empty())
+			cexpr = " if (" + buildCondExpr(x64cond) + ")";
+		line("//" + cexpr + " goto " + ops);
+		pendingCond_.clear();
+		inPrologue_ = false;
+	}
+
+	void processARM64Asm(const AsmText& at, const string& mnem, const string& opsRaw, bool ilCovered)
+	{
+		// When the IL already lifted this address, its expression is the better
+		// one; only control flow is still gathered from the asm here.
+		if (ilCovered &&
+			mnem != "cmp" && mnem != "cmn" && mnem != "tst" &&
+			mnem != "b" && mnem != "br" && mnem != "bl" && mnem != "blr" &&
+			mnem != "cbz" && mnem != "cbnz" && mnem != "tbz" && mnem != "tbnz" &&
+			mnem != "ret" && !(mnem.size() > 2 && mnem[0] == 'b' && mnem[1] == '.')) {
+			return;
+		}
+		string ops = normalizeArm64Text(opsRaw);
+
+		// --- load ---
+		if (mnem == "ldr" || mnem == "ldur" || mnem == "ldrb" || mnem == "ldurb" ||
+			mnem == "ldrh" || mnem == "ldurh" || mnem == "ldrsw" ||
+			mnem == "ldrsb" || mnem == "ldursb" || mnem == "ldrsh" || mnem == "ldursh") {
+			auto parts = splitTopLevel(ops);
+			if (parts.size() >= 2) {
+				emitLoadReg(trimStr(parts[0]), trimStr(parts[1]));
+				return;
+			}
+			rawLine(mnem, ops);
+			return;
+		}
+		// --- store ---
+		if (mnem == "str" || mnem == "stur" || mnem == "strb" || mnem == "sturb" ||
+			mnem == "strh" || mnem == "sturh") {
+			auto parts = splitTopLevel(ops);
+			if (parts.size() >= 2) {
+				string src = expandToken(trimStr(parts[0]));
+				MemRef m = parseMemRef(trimStr(parts[1]));
+				if (!m.valid) {
+					rawLine(mnem, ops);
+					return;
+				}
+				emitStoreMem(m, src);
+				return;
+			}
+			rawLine(mnem, ops);
+			return;
+		}
+		// --- move ---
+		if (mnem == "mov") {
+			auto parts = splitTopLevel(ops);
+			if (parts.size() >= 2) {
+				string dst = trimStr(parts[0]);
+				string src = trimStr(parts[1]);
+				if ((dst == "fp" && src == "SP") || (dst == "SP" && src == "fp"))
+					return; // frame setup / teardown boilerplate
+				emitLoadReg(dst, src);
+				return;
+			}
+			rawLine(mnem, ops);
+			return;
+		}
+		if (mnem == "movz" || mnem == "movn" || mnem == "movk") {
+			processARM64MovImm(mnem, ops);
+			return;
+		}
+		if (mnem == "orr") {
+			// capstone renders the mov alias as "orr xd, xzr, xm"
+			auto parts = splitTopLevel(ops);
+			if (parts.size() >= 3 && trimStr(parts[1]) == "NULL") {
+				emitLoadReg(trimStr(parts[0]), trimStr(parts[2]));
+				return;
+			}
+			rawLine(mnem, ops);
+			return;
+		}
+		// --- pointer arithmetic (pool addressing and simple offsets) ---
+		if (mnem == "add" || mnem == "sub") {
+			if (!processARM64AddSub(mnem, ops))
+				rawLine(mnem, ops);
+			return;
+		}
+		// --- compare (feeds the next conditional branch) ---
+		if (mnem == "cmp" || mnem == "cmn" || mnem == "tst") {
+			pendingCond_ = stripSizePrefix(expandText(ops));
+			lastCondIsTest_ = (mnem == "tst");
+			return;
+		}
+		// --- conditional branches ---
+		if (mnem.size() > 2 && mnem[0] == 'b' && mnem[1] == '.') {
+			processARM64CondBranch(mnem.substr(2), ops);
+			return;
+		}
+		if (mnem == "cbz" || mnem == "cbnz") {
+			auto parts = splitTopLevel(ops);
+			if (parts.size() >= 2) {
+				string reg = expandToken(trimStr(parts[0]));
+				string op = (mnem == "cbz") ? "==" : "!=";
+				line("// if (" + reg + " " + op + " 0) goto " + trimStr(parts[1]));
+				inPrologue_ = false;
+			}
+			return;
+		}
+		if (mnem == "tbz" || mnem == "tbnz") {
+			auto parts = splitTopLevel(ops);
+			if (parts.size() >= 3) {
+				string reg = expandToken(trimStr(parts[0]));
+				string op = (mnem == "tbz") ? "==" : "!=";
+				line("// if ((" + reg + " & (1 << " + trimStr(parts[1]) + ")) " + op +
+					" 0) goto " + trimStr(parts[2]));
+				inPrologue_ = false;
+			}
+			return;
+		}
+		// --- unconditional / register branches ---
+		if (mnem == "b" || mnem == "br") {
+			line(std::format("// goto {}", ops));
 			inPrologue_ = false;
 			return;
 		}
-		// register / immediate load
-		if (!isRegToken(dst)) {
-			line(std::format("// mov {} = {}", dst, src));
+		// --- calls ---
+		if (mnem == "bl") {
+			if (at.dataType == AsmText::Call)
+				emitCall(std::format("0x{:x}", at.callAddress));
+			else
+				line(std::format("// bl {}", ops));
 			return;
 		}
-		string val;
-		if (src[0] == '[') {
-			MemRef m = parseMemRef(src);
-			if (m.valid) {
-				if (m.base == "fp") {
-					val = readFpSlot(m.disp);
-				}
-				else if (m.base == "PP") {
-					// pool constant: keep the raw offset form.  Resolving it via
-					// getPoolObjectDescription() would reach ObjectToString() and
-					// the (still filling) type DB too early, which is a known
-					// crash source on some samples; the asm comment keeps the
-					// rich description anyway.
-					val = std::format("[pp{}]", hexOffset(m.disp));
-				}
-				else if (m.base == "THR") {
-					// thread-internal read (null / stack limit / dispatch tbl):
-					// no application value, keep the enclosing expression as IL
-					return;
-				}
-				else if (m.base == "CODE")
-					val = std::format("CODE{}", hexOffset(m.disp));
-				else {
-					string bexpr = expandToken(m.base);
-					if (isInternalBase(bexpr))
-						return; // implementation detail of an IL-lifted access
-					if (m.disp == -1)
-						val = bexpr + "->[-1]"; // class-id / header tag reads
-					else
-						val = bexpr + std::format("[{}]", hexOffset(m.disp));
-				}
-			}
-			else {
-				// unparsable memory form: raw
-				line(std::format("// mov {} = {}", dst, src));
-				return;
-			}
+		if (mnem == "blr") {
+			line(std::format("// call {} (indirect)", ops));
+			return;
 		}
-		else {
-			val = expandToken(src);
+		// --- return (normally handled before dispatch, kept for safety) ---
+		if (mnem == "ret") {
+			if (!emittedReturn_)
+				emitReturn();
+			inPrologue_ = false;
+			return;
 		}
-		setReg(dst, val);
-		inPrologue_ = false;
+		rawLine(mnem, ops);
 	}
 
 	string hexOffset(int64_t off)
