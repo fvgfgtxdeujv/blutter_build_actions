@@ -22,6 +22,34 @@ if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
 endif()
 
 find_package(${DARTLIB} REQUIRED PATHS "${PROJECT_SOURCE_DIR}/../packages")
+
+# Dart version compatibility macros are normally supplied by scripts/build.py,
+# which probes the dartvm headers and passes -DHAS_*=1. A hand-written cmake
+# invocation that omits them compiles out the matching branches in
+# src/DartTypes.cpp and makes the parser abort on "Invalid abstract type"
+# (e.g. RecordType cid=50 on Dart 3.x when HAS_RECORD_TYPE is missing).
+# Probe the same header here as a fallback so the macros cannot be silently lost.
+get_target_property(_dartvm_inc_dirs ${DARTLIB} INTERFACE_INCLUDE_DIRECTORIES)
+if (_dartvm_inc_dirs)
+	list(GET _dartvm_inc_dirs 0 _dartvm_inc_dir)
+	if (EXISTS "${_dartvm_inc_dir}/vm/class_id.h")
+		file(READ "${_dartvm_inc_dir}/vm/class_id.h" _dartvm_class_id_h)
+		if (NOT DEFINED HAS_TYPE_REF)
+			string(FIND "${_dartvm_class_id_h}" "V(TypeRef)" _dartvm_pos_ref)
+			if (NOT _dartvm_pos_ref EQUAL -1)
+				set(HAS_TYPE_REF 1)
+			endif()
+		endif()
+		if (NOT DEFINED HAS_RECORD_TYPE)
+			string(FIND "${_dartvm_class_id_h}" "V(RecordType)" _dartvm_pos_rec)
+			if (NOT _dartvm_pos_rec EQUAL -1)
+				set(HAS_RECORD_TYPE 1)
+			endif()
+		endif()
+		message(STATUS "Auto-detected Dart type macros: HAS_TYPE_REF=${HAS_TYPE_REF} HAS_RECORD_TYPE=${HAS_RECORD_TYPE}")
+	endif()
+endif()
+
 # On Windows always use the bundled Capstone from init_env_win.py (MSVC may not be
 # set yet depending on generator/compiler detection order).
 if (WIN32 OR MSVC)

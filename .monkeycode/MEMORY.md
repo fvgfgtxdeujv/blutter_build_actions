@@ -36,14 +36,8 @@ Entries discovered by the Agent during task execution should follow this format:
 - Context: Discovered by Agent while fixing Gitee API 405 error in build-dart-version.yml tag sync
 - Category: Troubleshooting & Debugging
 - Instructions:
-  - Gitee API v5 没有 /repos/{owner}/{repo}/git/tags 端点，对该路径 POST 会返回 405 Method Not Allowed。
-  - 创建 tag 的正确接口是 POST /repos/{owner}/{repo}/tags，参数为 refs（起点，传分支名或已存在的 commit sha，如 master）、tag_name、tag_message，成功返回 201 及 Tag 对象。
-  - Gitee API v5 完整 swagger spec 可无认证从 https://gitee.com/api/v5/swagger_doc.json 获取（版本 5.x），用于查证任何接口的路径、HTTP 方法和参数。
-  - 另有从 Swagger 自动提取的中文接口文档可作参考：https://corper.cn/down.php/25b7311581ab33080c58cfaf124909f4.md（264 个接口，2026-08-05 生成）。
-  - Gitee API 认证支持 Authorization: token <access_token> header，也支持 URL query 参数 access_token。
-  - 若目标 Gitee 仓库没有源码历史（只有初始 commit），创建 tag 时 refs 只能传该仓库已存在的 ref（如 master），不能传 GitHub 仓库的 commit sha。
-  - Gitee API v5 没有删除 tag 的接口（DELETE /repos/{owner}/{repo}/tags/{tag} 在 nginx 层返回 404，swagger 264 个接口中 tags 仅 GET/POST）。删除 tag 只能通过 git push --delete refs/tags/{tag} 或网页操作。
-  - Gitee API 的写操作（POST/PUT/DELETE/PATCH）在路由匹配之前有全局登录中间件，未登录时任意路径都返回 401 登录失效；因此无法用无 token 请求探测写接口是否存在，需用 GET 公开接口或 swagger spec 确认。
+  - 创建 tag 用 POST /repos/{owner}/{repo}/tags，参数 refs（起点，传分支名或已存在的 commit sha，如 master）、tag_name、tag_message，返回 201；没有 /git/tags 端点（POST 返回 405），也没有删除 tag 的接口（只能 git push --delete refs/tags/{tag} 或网页）。若仓库没有源码历史（只有初始 commit），refs 只能传该仓库已存在的 ref，不能传其它仓库的 commit sha。
+  - swagger spec 可无认证从 https://gitee.com/api/v5/swagger_doc.json 获取；另有提取的中文接口文档 https://corper.cn/down.php/25b7311581ab33080c58cfaf124909f4.md（264 接口，2026-08-05）。认证支持 Authorization: token <access_token> 或 URL query access_token。写操作（POST/PUT/DELETE/PATCH）在路由匹配前有全局登录中间件，未登录任意路径都返回 401，故无法用无 token 请求探测写接口是否存在，需查 swagger spec。
 
 [Project Knowledge Summary]
 - Date: 2026-08-24
@@ -57,7 +51,7 @@ Entries discovered by the Agent during task execution should follow this format:
   - 完整解析输出加 stdbuf -oL -eL 分行缓冲，日志约 2-3 分钟，成功以 EXIT=0 且出现 "Generating Frida script" 为标志
   - 输入 libapp.so 唯一：/tmp/opencode/apk_extract/lib/arm64-v8a/libapp.so；输出目录每次用新路径便于对比
   - 解析输出中带 `Analysis error at line ...` 的 InsnException 打印属预期（单个函数分析退化），程序不崩溃即正常；真正致命的是未捕获异常 terminate（需 gdb 定位）
-  - 第三方版构建必须显式传 -DHAS_RECORD_TYPE=1（CMake 变量）；缺失时会在 DartTypes.cpp:330 FATAL "Invalid abstract type" 崩溃（gdb 栈：loadFromObjectPool → DartTypeDb::FindOrAdd）
+  - 第三方版构建的 HAS_RECORD_TYPE 自 2026-09-17 起由 blutter/CMakeLists.txt 探测 dartvm class_id.h 自动确定（见 2026-09-17 条目）；在自动探测加入前，手工构建缺 -DHAS_RECORD_TYPE=1 会在 DartTypes.cpp FATAL "Invalid abstract type" 崩溃（gdb 栈：loadFromObjectPool → DartTypeDb::FindOrAdd）
   - 第三方版源码目录需含 scripts/frida.template.js（从官方版复制），并在运行 CWD 放 scripts 软链（FridaWriter 按 exe 目录→父目录→CWD 顺序找模板，否则 copy_file 报 No such file）；该副本已随清理删除，如需本地运行可从仓库根 /workspace/scripts/frida.template.js 复制
   - 构建依赖 /workspace/packages（已由 symlink 转为真实目录，含 dartvm3.3.4_android_arm64 头文件与静态库），find_package 从 `../packages` 相对源码目录定位
 
@@ -69,8 +63,7 @@ Entries discovered by the Agent during task execution should follow this format:
   - GitHub Actions 的 jobs.<job_id>.name 不支持表达式求值（${{ }} 会原样显示在 UI），本项目约定 job name 一律静态化，动态信息（构建目标等）通过 workflow 级 run-name 展示。
   - 判断产物源文件名时以 scripts/build.py 的 _arch_suffix 为准：aarch64→android_arm64、windows_x64→windows_x64、x86_64→linux_x64（x86_64 在 x64 宿主为非交叉编译，产物不带头文件后缀）。
   - 定制版 blutter.py 的下载 base 必须与解析目标一致（blutter_dartvm<ver>_{os_name}_{arch}），曾因硬编码 android_arm64 导致 windows_x64 产物无法自动下载。
-  - build.py 的 arch 目标拆为「产物架构（os/arch）」与「解析架构（blutter_arch，决定编哪套 CodeAnalyzer/Disassembler）」两维；blutter_arch=x64 时 CMake 传 -DNO_FRIDA=1（不生成 frida.js）。aarch64_windows 目标（ARM 宿主解析 Windows 桌面）已随 ubuntu_*_windows 一并移除。
-  - ubuntu_*_windows 目标已在 build-blutter.yml / build-dart-version.yml / build.py 中整体移除（2026-08-27），保留的构建目标为 windows_android、windows_windows、ubuntu_22、ubuntu_24。
+  - build.py 的 arch 目标拆为「产物架构（os/arch）」与「解析架构（blutter_arch，决定编哪套 CodeAnalyzer/Disassembler）」两维；blutter_arch=x64 时 CMake 传 -DNO_FRIDA=1（不生成 frida.js）。ubuntu_*_windows 与 aarch64_windows 目标已于 2026-08-27 在 build-blutter.yml / build-dart-version.yml / build.py 中整体移除，保留 windows_android、windows_windows、ubuntu_22、ubuntu_24。
 
 [Project Knowledge Summary]
 - Date: 2026-08-31
@@ -144,3 +137,14 @@ Entries discovered by the Agent during task execution should follow this format:
 - Context: 用户要求伪代码改为按需输出
 - Instructions:
   - 伪代码（`// pseudo:` 段）默认不输出，asm/*.dart 与经典 dump 逐字节一致；仅在命令行传入 `-p` / `--pseudo` 时才在函数体后追加伪代码段。开关实现：PseudoCode::SetEnabled/IsEnabled（全局默认 false），main.cpp 的 args::Flag pseudo 触发，DartDumper 的伪代码生成点用 PseudoCode::IsEnabled() 守卫
+
+[Project Knowledge Summary]
+- Date: 2026-09-17
+- Context: Discovered by Agent while root-causing the DartTypes.cpp "Invalid abstract type" abort (winapp x64)
+- Category: Build Methods & Troubleshooting & Debugging
+- Instructions:
+  - 该崩溃不是间歇性的，而是确定性构建配置缺陷：winapp/app.so 的 TypeArguments 里含 Dart RecordType。dartvm3.3.4 抽象类型 cid 为 kTypeCid=48、kFunctionTypeCid=49、kRecordTypeCid=50、kTypeParameterCid=51；缺 `-DHAS_RECORD_TYPE` 时 `case dart::kRecordTypeCid` 被 `#ifdef` 编译掉，落到 FATAL 全量中止
+  - 最小复现：用缺宏的二进制解析 /tmp/opencode/winapp/app.so，稳定 SIGABRT（RC=134）。本机 /tmp/opencode/ci/build/blutter_asan 与 blutter_asan_o3 的历史 CMakeCache 均无 HAS_RECORD_TYPE，故 asan*.log/out_base.log 记录的就是该崩溃；标准构建路径（scripts/build.py 探测 class_id.h 传 -DHAS_RECORD_TYPE=1）一直不受影响
+  - 已修：blutter/CMakeLists.txt 在 find_package 后用 dartvm 的 vm/class_id.h 自动探测 HAS_TYPE_REF/HAS_RECORD_TYPE（仅当调用方未传时生效，build.py 传值优先）；DartTypes.cpp 的 FATAL 改为打印真实 cid，便于下次一眼定位
+  - 已修：blutter/src/DartDumper.cpp asm 输出路径四处多参 `std::format("{:#x}: {}", addr, str)`（原 981/988/997/999）改为字符串拼接（数值格式化保留单参），与 PseudoCode.cpp 约定一致。此即 ASAN 在 DartDumper.cpp:988 报 stack-buffer-overflow 的根因（libc++ `__output_buffer::__flush` 越界读 16 字节），也是 release 构建 asm/*.dart 偶发坏字节（行内 NUL/指针乱码）的来源
+  - 验证：bash scripts/regression.sh all → PASS=66 FAIL=0；x64/arm64 标准构建 reconfigure 均打印 “Auto-detected Dart type macros”，无回归。ASAN 复跑完整产出 2718 个 asm + frida/ida/objs/pp/strings，`ERROR: AddressSanitizer`=0（仅退出时 LeakSanitizer，工具固有），对照修复前只产出 50 个 asm 即崩。零漂移复核：对 asm/*.dart 归一化所有 `0x` 十六进制、`@` 对象后缀与大十进制数后，仅 4 处差异，且都是修复前基线里的坏字节被清除（修复后变干净），其余逐字节一致

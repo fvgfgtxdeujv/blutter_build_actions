@@ -326,8 +326,11 @@ DartAbstractType* DartTypeDb::FindOrAdd(dart::AbstractTypePtr abTypePtr)
 	case dart::kFunctionTypeCid:
 		return FindOrAdd(dart::FunctionType::RawCast(abTypePtr));
 	}
-	//return nullptr;
-	FATAL("Invalid abstract type");
+	// Reachable when the snapshot holds an AbstractType subclass this build was
+	// not compiled for (e.g. RecordType when HAS_RECORD_TYPE is missing) or a
+	// corrupted slot. Report the real class id so the gap is immediately clear.
+	FATAL("Invalid abstract type: cid=%d (check build defines such as HAS_RECORD_TYPE)",
+		(int)abTypePtr.GetClassId());
 }
 
 const DartTypeArguments* DartTypeDb::FindOrAdd(dart::TypeArgumentsPtr typeArgsPtr)

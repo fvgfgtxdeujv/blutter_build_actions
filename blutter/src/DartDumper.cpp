@@ -978,14 +978,14 @@ void DartDumper::DumpCode(const char* out_dir)
 						else {
 							while (il_itr != il_end && (*il_itr)->Start() < asmText.addr) {
 								if ((*il_itr)->Kind() != ILInstr::Unknown) {
-									of << std::format("{:#x}: {}\n", (*il_itr)->Start(), (*il_itr)->ToString());
+									of << std::format("{:#x}", (*il_itr)->Start()) << ": " << (*il_itr)->ToString() << "\n";
 									of << "    // ";
 								}
 								++il_itr;
 							}
 							if (il_itr != il_end && (*il_itr)->Start() == asmText.addr) {
 								if ((*il_itr)->Kind() != ILInstr::Unknown) {
-									of << std::format("{:#x}: {}\n", asmText.addr, (*il_itr)->ToString());
+									of << std::format("{:#x}", asmText.addr) << ": " << (*il_itr)->ToString() << "\n";
 									of << "    //     ";
 									range = (*il_itr)->Range();
 								}
@@ -994,9 +994,9 @@ void DartDumper::DumpCode(const char* out_dir)
 						}
 
 						if (extra.empty())
-							of << std::format("{:#x}: {}\n", asmText.addr, &asmText.text[0]);
+							of << std::format("{:#x}", asmText.addr) << ": " << &asmText.text[0] << "\n";
 						else
-							of << std::format("{:#x}: {}  ; {}\n", asmText.addr, &asmText.text[0], extra);
+							of << std::format("{:#x}", asmText.addr) << ": " << &asmText.text[0] << "  ; " << extra << "\n";
 					}
 				}
 #endif // NO_CODE_ANALYSIS
