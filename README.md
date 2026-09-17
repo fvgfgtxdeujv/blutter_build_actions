@@ -49,7 +49,7 @@ Actions → **获取待构建 Dart 版本**，运行后从日志末尾复制待�
 - `--blacklist <file>`：语义黑名单文件透传给二进制（覆盖内置默认，`$BLUTTER_BLACKLIST` 环境变量同样生效）
 - `-p` / `--pseudo`：为 `asm/` 输出追加 `// pseudo:` 伪代码注释段（默认关闭；透传给底层二进制，与 `--blacklist` 相同的传递方式）
 - iOS / macOS 输入直接报错拒绝（`App`/Mach-O 布局、`--dart-version <ver>_ios_*` 均已移除）
-- 解析产物含 `asm/`（带 `// semantic:` 注释）、`objs.txt`/`pp.txt`、`strings_to_funcs.txt` 交叉表、`ida_script/`（`addNames.py` 语义重命名 + `semantic_names.txt` 追踪表）；Frida 动态 dump 脚本按目标生成：Android arm64 → `blutter_frida.js`，Flutter Windows 桌面 x64 → `blutter_frida_windows.js`（非压缩指针、栈参数读取、多锚点 base 发现；锚点阈值与运行时行为需在真实 Windows+Frida 环境复核）
+- 解析产物含 `asm/`（带 `// semantic:` 注释）、`objs.txt`/`pp.txt`（实例字段在类元数据可用时标注字段名，形如 `_name (off_8): "value"`，无名字段保持 `off_x: value`）、`strings_to_funcs.txt` 交叉表、`ida_script/`（`addNames.py` 语义重命名 + `semantic_names.txt` 追踪表）；Frida 动态 dump 脚本按目标生成：Android arm64 → `blutter_frida.js`，Flutter Windows 桌面 x64 → `blutter_frida_windows.js`（非压缩指针、栈参数读取、多锚点 base 发现；锚点阈值与运行时行为需在真实 Windows+Frida 环境复核）
 
 ## 构建目标
 
@@ -100,4 +100,5 @@ blutter_dartvm3.3.4_android_arm64 -i libapp.so -o out -p
 ## 其他
 
 - **版本兼容**：与官方 blutter 支持的 Dart 版本一致
+- **解析健壮性**：SIMD typed array（`Float32x4` / `Int32x4` / `Float64x2`）与未处理的内部类不再中止整次解析，分别输出元素值 / `UnhandledClass(name, cid=N)` 占位；手工 cmake 构建会在 `find_package` 后自动探测 `HAS_TYPE_REF` / `HAS_RECORD_TYPE`，避免调用方漏传宏导致 `Invalid abstract type` 中止（`scripts/build.py` 显式传值时以后者为准）
 - **输出目录**：运行 blutter 后生成 `asm/`（反汇编；加 `-p` 时每个函数另含 `// pseudo:` 伪代码注释段）、`objs.txt` / `pp.txt`（Object Pool 转储）；`blutter_frida.js`（Frida 脚本，Android 手机端 hook 用）仅解析安卓的目标生成，解析 Windows 桌面 `app.so` 的目标不生成

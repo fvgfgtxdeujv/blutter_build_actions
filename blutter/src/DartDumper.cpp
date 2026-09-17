@@ -10,6 +10,7 @@
 #include <cctype>
 #include <string_view>
 #include <unordered_set>
+#include <unordered_map>
 #include "Disassembler.h"
 #include "DartThreadInfo.h"
 #include "CodeAnalyzer.h"
@@ -1111,10 +1112,41 @@ std::string DartDumper::ObjectToString(dart::Object& obj, bool simpleForm, bool 
 				ACCUMLATE(double);
 				break;
 #undef ACCUMLATE
-			case dart::kFloat32x4ArrayElement:
-			case dart::kInt32x4ArrayElement:
-			case dart::kFloat64x2ArrayElement:
-				FATAL("TODO: simd array");
+			// SIMD typed arrays store one 16-byte simd128_value_t per element
+			// (kSimd128Size). Decode by element kind so a SIMD array no longer aborts.
+			case dart::kFloat32x4ArrayElement: {
+				auto data = reinterpret_cast<const dart::simd128_value_t*>(ptr);
+				txt = "[";
+				for (intptr_t i = 0; i < arr_len; i++) {
+					if (i != 0)
+						txt += ", ";
+					const auto& v = data[i].float_storage;
+					txt += std::format("({}, {}, {}, {})", v[0], v[1], v[2], v[3]);
+				}
+				break;
+			}
+			case dart::kInt32x4ArrayElement: {
+				auto data = reinterpret_cast<const dart::simd128_value_t*>(ptr);
+				txt = "[";
+				for (intptr_t i = 0; i < arr_len; i++) {
+					if (i != 0)
+						txt += ", ";
+					const auto& v = data[i].int_storage;
+					txt += std::format("({:#x}, {:#x}, {:#x}, {:#x})", v[0], v[1], v[2], v[3]);
+				}
+				break;
+			}
+			case dart::kFloat64x2ArrayElement: {
+				auto data = reinterpret_cast<const dart::simd128_value_t*>(ptr);
+				txt = "[";
+				for (intptr_t i = 0; i < arr_len; i++) {
+					if (i != 0)
+						txt += ", ";
+					const auto& v = data[i].double_storage;
+					txt += std::format("({}, {})", v[0], v[1]);
+				}
+				break;
+			}
 			}
 
 			txt += ']';
@@ -1336,7 +1368,12 @@ std::string DartDumper::ObjectToString(dart::Object& obj, bool simpleForm, bool 
 	ASSERT(obj.IsInstance());
 
 	if (cid < dart::kNumPredefinedCids) {
-		FATAL("Unhandle internal class %s (%ld)", app.GetClass(cid)->Name().c_str(), cid);
+		// An internal class id this build does not render (e.g. a predefined type
+		// whose branch is compiled out). Report a placeholder instead of aborting
+		// the whole dump, so one unexpected object cannot kill the run.
+		DartClass* dartCls = (size_t)cid < app.classes.size() ? app.classes[cid] : nullptr;
+		return dartCls ? std::format("UnhandledClass({}, cid={})", dartCls->Name(), cid)
+			: std::format("UnhandledClass(cid={})", cid);
 	}
 
 	// TODO: print library and package prefix
@@ -1402,10 +1439,26 @@ std::string DartDumper::dumpInstanceFields(dart::Object& obj, DartClass& dartCls
 	std::stringstream ss;
 	std::string indent(depth * 2, ' ');
 
+	// Resolve field offsets to their declared names so the dump reads as
+	// `_port (off_c): ...` instead of a bare offset. Only real non-static named
+	// fields are used; synthetic fields created by code analysis (empty name)
+	// and static fields (their offset lives in the static list, not the object)
+	// are skipped.
+	std::unordered_map<uint32_t, const std::string*> fieldNames;
+	for (auto field : dartCls.Fields()) {
+		if (!field->IsStatic() && !field->Name().empty())
+			fieldNames.emplace(field->Offset(), &field->Name());
+	}
+	auto fieldLabel = [&fieldNames](intptr_t off) -> std::string {
+		auto it = fieldNames.find((uint32_t)off);
+		if (it != fieldNames.end())
+			return std::format("{} (off_{:x})", *it->second, off);
+		return std::format("off_{:x}", off);
+	};
+
 	const auto bitmap = dartCls.UnboxedFieldsBitmap();
 	while (offset < dartCls.Size()) {
 		std::string txtField;
-		// TODO: match the offset to field name if possible
 		if (bitmap.Get(offset / dart::kCompressedWordSize)) {
 			// AOT uses native integer if it is less than 31 bits (compressed pointer)
 			// integer (4/8 bytes) or double (8 bytes)
@@ -1414,10 +1467,10 @@ std::string DartDumper::dumpInstanceFields(dart::Object& obj, DartClass& dartCls
 			auto p = reinterpret_cast<uint64_t*>(ptr + offset);
 			// it is rare to find integer that larger than 0x1000_0000_0000_0000
 			if (*p <= 0x1000000000000000 || *p >= 0xffffffffffff0000) {
-				txtField = std::format("off_{:x}: int({:#x})", offset, *p);
+				txtField = std::format("{}: int({:#x})", fieldLabel(offset), *p);
 			}
 			else {
-				txtField = std::format("off_{:x}: double({})", offset, *((double*)p));
+				txtField = std::format("{}: double({})", fieldLabel(offset), *((double*)p));
 			}
 			offset += dart::kCompressedWordSize;
 		}
@@ -1430,14 +1483,14 @@ std::string DartDumper::dumpInstanceFields(dart::Object& obj, DartClass& dartCls
 					if (objPtr2 != nullptr && objPtr2.GetClassId() != dart::kNullCid) {
 						obj = objPtr2;
 						if (simpleForm || objPtr2.GetClassId() < dart::kNumPredefinedCids)
-							txtField = std::format("off_{:x}: {}", offset, ObjectToString(obj, simpleForm, nestedObj, depth));
+							txtField = std::format("{}: {}", fieldLabel(offset), ObjectToString(obj, simpleForm, nestedObj, depth));
 						else
-							txtField = std::format("off_{:x}_{}", offset, ObjectToString(obj, simpleForm, nestedObj, depth));
+							txtField = std::format("{}_{}", fieldLabel(offset), ObjectToString(obj, simpleForm, nestedObj, depth));
 					}
 				}
 				else {
 					obj = p->DecompressSmi();
-					txtField = std::format("off_{:x}_Smi: {:#x}", offset, dart::Smi::Cast(obj).Value());
+					txtField = std::format("{}_Smi: {:#x}", fieldLabel(offset), dart::Smi::Cast(obj).Value());
 				}
 			}
 		}
