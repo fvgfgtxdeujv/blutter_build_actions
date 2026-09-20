@@ -1,7 +1,7 @@
 # 改进待办（Backlog）
 
-记录时间：2026-09-17（2026-09-20 更新 C/D 落地）
-分支基线：`master` `84d135a`（A/B/C/D 落地后见对应提交）
+记录时间：2026-09-17（2026-09-20 更新 C/D 落地并标注提交号）
+分支基线：`master` `3596f9e`（A/B 见 `3596f9e`，C/D 见 `36b1217`，DartTypes/格式化修复见 `84d135a`）
 用途：把「界定清晰、改动小」的候选改进集中登记，避免散落在代码 TODO 里。每项落地后请在此标注提交号，并同步更新 `README.md` / `semantic-clue-collection.md` 的相关段落。
 
 ## 0. 已排除（避免重复）
@@ -29,7 +29,7 @@
 - 注意：混淆字段名可能是 `_adg` 这类短名，命中时建议同时保留 offset（如 `_adg(off_c): ...`）便于交叉核对
 - 工作量：小（约 30-50 行）
 - 验证：`scripts/regression.sh all` 仍 PASS=66；抽 `winapp`/`zip` 的 `pp.txt`、`objs.txt` 对比字段名命中数；asm 默认输出零漂移
-- 状态：**已落地**（2026-09-17，未提交）。实现：`dumpInstanceFields` 内用 `dartCls.Fields()` 建 offset→名映射（跳过 static 与空名），命中输出 `name (off_x): value`
+- 状态：**已落地**（2026-09-17，提交 `3596f9e`）。实现：`dumpInstanceFields` 内用 `dartCls.Fields()` 建 offset→名映射（跳过 static 与空名），命中输出 `name (off_x): value`
 - 落地实测：机制正确（`Symbol._name` 命中），但两个样本各只命中 4 处。原因已定位：混淆器把实例字段名抹成空串（`qea` offset 8 的字段 `Name()` 为空），而 `_Enum` 这类 VM 内部类在 `DartClass.cpp:37`（`id <= kLastInternalOnlyCid`）提前 return，字段表根本没加载。这是数据缺失，非映射 bug
 
 ### B. `ObjectToString` 兜底降级（消除 FATAL abort）
@@ -41,7 +41,7 @@
 - 与 2026-09-17 修复同源：缺宏/未覆盖 cid 会让单个对象终止整个解析，健壮性问题应就地降级
 - 工作量：小
 - 验证：回归真输入仍 EXIT=0；构造/stub 覆盖到 FATAL 分支确认不再 abort
-- 状态：**已落地**（2026-09-17，未提交）。SIMD 三个 element 分支按 `dart::simd128_value_t` 联合体解码（float/int/double storage），未知内部 cid 改为返回 `UnhandledClass(name, cid=N)` 占位
+- 状态：**已落地**（2026-09-17，提交 `3596f9e`）。SIMD 三个 element 分支按 `dart::simd128_value_t` 联合体解码（float/int/double storage），未知内部 cid 改为返回 `UnhandledClass(name, cid=N)` 占位
 - 落地实测：两样本池中无 SIMD 数组、无未处理 cid，故这两个分支未被真实触发（编译通过 + 逻辑对齐 `kSimd128Size = sizeof(simd128_value_t)`）；回归 PASS=66，asm 零漂移
 
 ### C. 实例显示补类名与库前缀
@@ -53,7 +53,7 @@
 - 做法：`kInstanceCid` 走真实类名；`dtype` 输出用库前缀 + 具体类型实参（`[lib.url] Class<args>`；`FullNameWithPackage()` 会丢具体实参，故改为拼接而非直接调用）
 - 工作量：很小
 - 验证：`objs.txt` / 池描述抽样对比，断言无异常回退
-- 状态：**已落地**（2026-09-20，未提交）。`kInstanceCid` 输出 `Obj![dart:core] Object@addr`；`dumpInstance` 的 simpleForm 与全形式类名统一为 `[lib.url] Class<args>`（`lib.url` 为空时不加前缀，兼容 native/dummy 类）
+- 状态：**已落地**（2026-09-20，提交 `36b1217`）。`kInstanceCid` 输出 `Obj![dart:core] Object@addr`；`dumpInstance` 的 simpleForm 与全形式类名统一为 `[lib.url] Class<args>`（`lib.url` 为空时不加前缀，兼容 native/dummy 类）
 - 落地实测：两个样本 asm 池描述与 objs.txt 均带库前缀（如 `Obj![package:flutter/src/services/platform_channel.dart] Uea<Object?>@addr`）；归一化剥离 `[lib] ` 前缀后与基线逐字节一致
 
 ## 3. 中等候选
@@ -65,7 +65,7 @@
 - 做法：判定类为 enum 后打印 `EnumName.value`（dartvm enum 相关 API 待核）
 - 工作量：小-中
 - 验证：抽含 enum 的样本对比输出
-- 状态：**已落地**（2026-09-20，未提交）。`DartClass` 暴露 `Type()`；`dumpInstance` 命中 `ENUM` 时附加 `enumValueName()`：按 `_Enum` 布局扫描实例字段槽，取第一个 String 槽（即 `_name`）作为常量名，输出 `Obj![lib] EnumName.value@addr`，找不到名字则退回原样
+- 状态：**已落地**（2026-09-20，提交 `36b1217`）。`DartClass` 暴露 `Type()`；`dumpInstance` 命中 `ENUM` 时附加 `enumValueName()`：按 `_Enum` 布局扫描实例字段槽，取第一个 String 槽（即 `_name`）作为常量名，输出 `Obj![lib] EnumName.value@addr`，找不到名字则退回原样
 - 落地实测：`_Enum` 为 VM 内部类，未镜像进 `DartClass` 字段名，但常量名可从实例内存取得；zip 得 `CSc.blockMappingStart`、`IPc.restore` 等，winapp 得 `FF.windows`、`ePb.file` 等（winapp 共 12661 处）。**顺带发现**：`walkObject`/`dumpInstanceFields` 对 unboxed 字段一律按 `kCompressedWordSize` 双字前进，在 x64 非压缩构建（kCompressedWordSize=8）会前进 16 字节、跳过其后的字段（如 `_Enum` 的 `_name` 在 0x10 处被跳过）；`enumValueName` 改用固定 8 字节前进以同时兼容 arm64/x64，未改动这两处既有逻辑
 
 ### E. IL 行补池对象描述
