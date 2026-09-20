@@ -41,6 +41,10 @@ private:
 	std::string dumpInstance(dart::Object& obj, bool simpleForm = false, bool nestedObj = false, int depth = 0);
 	std::string dumpInstanceFields(dart::Object& obj, DartClass& dartCls, intptr_t ptr, intptr_t offset, bool simpleForm = false, bool nestedObj = false, int depth = 0);
 
+	// Name of the enum constant an enum instance represents (read from the
+	// `_name` field of the VM-internal `_Enum` superclass), or "" if unknown.
+	std::string enumValueName(dart::Object& obj, DartClass& enumCls);
+
 	void applyStruct4Ida(std::ostream& of);
 
 	const std::string& getQuoteString(dart::Object& obj);

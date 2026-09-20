@@ -1,7 +1,7 @@
 # 改进待办（Backlog）
 
-记录时间：2026-09-17
-分支基线：`master` `84d135a`
+记录时间：2026-09-17（2026-09-20 更新 C/D 落地）
+分支基线：`master` `84d135a`（A/B/C/D 落地后见对应提交）
 用途：把「界定清晰、改动小」的候选改进集中登记，避免散落在代码 TODO 里。每项落地后请在此标注提交号，并同步更新 `README.md` / `semantic-clue-collection.md` 的相关段落。
 
 ## 0. 已排除（避免重复）
@@ -50,9 +50,11 @@
   - `DartDumper.cpp:1330` `case dart::kInstanceCid` 输出 `Obj!Object@{:x}`
   - `DartDumper.cpp:1342` `// TODO: print library and package prefix`
   - `DartDumper.cpp:1358` `dumpInstance` 的 simpleForm 分支输出 `Obj!{dtype}@addr`
-- 做法：`kInstanceCid` 走真实类名；`dtype` 输出用 `FullNameWithPackage()`（`DartFunction.cpp` 的 `Function` 分支已有先例，见 `:1165`）
+- 做法：`kInstanceCid` 走真实类名；`dtype` 输出用库前缀 + 具体类型实参（`[lib.url] Class<args>`；`FullNameWithPackage()` 会丢具体实参，故改为拼接而非直接调用）
 - 工作量：很小
 - 验证：`objs.txt` / 池描述抽样对比，断言无异常回退
+- 状态：**已落地**（2026-09-20，未提交）。`kInstanceCid` 输出 `Obj![dart:core] Object@addr`；`dumpInstance` 的 simpleForm 与全形式类名统一为 `[lib.url] Class<args>`（`lib.url` 为空时不加前缀，兼容 native/dummy 类）
+- 落地实测：两个样本 asm 池描述与 objs.txt 均带库前缀（如 `Obj![package:flutter/src/services/platform_channel.dart] Uea<Object?>@addr`）；归一化剥离 `[lib] ` 前缀后与基线逐字节一致
 
 ## 3. 中等候选
 
@@ -63,6 +65,8 @@
 - 做法：判定类为 enum 后打印 `EnumName.value`（dartvm enum 相关 API 待核）
 - 工作量：小-中
 - 验证：抽含 enum 的样本对比输出
+- 状态：**已落地**（2026-09-20，未提交）。`DartClass` 暴露 `Type()`；`dumpInstance` 命中 `ENUM` 时附加 `enumValueName()`：按 `_Enum` 布局扫描实例字段槽，取第一个 String 槽（即 `_name`）作为常量名，输出 `Obj![lib] EnumName.value@addr`，找不到名字则退回原样
+- 落地实测：`_Enum` 为 VM 内部类，未镜像进 `DartClass` 字段名，但常量名可从实例内存取得；zip 得 `CSc.blockMappingStart`、`IPc.restore` 等，winapp 得 `FF.windows`、`ePb.file` 等（winapp 共 12661 处）。**顺带发现**：`walkObject`/`dumpInstanceFields` 对 unboxed 字段一律按 `kCompressedWordSize` 双字前进，在 x64 非压缩构建（kCompressedWordSize=8）会前进 16 字节、跳过其后的字段（如 `_Enum` 的 `_name` 在 0x10 处被跳过）；`enumValueName` 改用固定 8 字节前进以同时兼容 arm64/x64，未改动这两处既有逻辑
 
 ### E. IL 行补池对象描述
 
@@ -93,7 +97,11 @@
 
 ## 4. 建议批次
 
-1. 第一批：A + B（同在 `ObjectToString` 函数族，可读性 + 健壮性一次拿到，风险低、可断言）
-2. 第二批：C + D + E（展示层小追加）
+1. 第一批：A + B（同在 `ObjectToString` 函数族，可读性 + 健壮性一次拿到，风险低、可断言）——**已落地**
+2. 第二批：C + D + E（展示层小追加）——C + D **已落地**，E 待做
 3. 伪代码主线：F → 之后视情况推进第 1 节控制流重建
 4. G 视需求排期
+
+## 5. 零漂移校验方法（C/D 后）
+
+C/D 会**有意**改变实例描述（加 `[lib] ` 前缀、加 `.value` 后缀）。校验时先用 `python3 scripts/norm_diff.py <baseline_dir> <current_dir>` 归一化：剥离 `Obj![...] ` 前缀与 `Obj!Name.value@` 的 `.value`，再归一化 `0x`/`@` 地址与大十进制数，然后与改动前基线比对。zip/winapp 两样本均 drifted=0（仅还剩版本号等无关差异时需人工确认）。基线可先 `cp -r out_regress out_baseline_cd` 备份。

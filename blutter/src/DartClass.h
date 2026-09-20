@@ -37,6 +37,7 @@ public:
 
 	DartType* DeclarationType() { return declarationType; }
 
+	ClassType Type() const { return type; }
 	const std::string& Name() const { return name; }
 	std::string FullName() const { return name + typeVectorName; }
 	std::string FullNameWithPackage() const;

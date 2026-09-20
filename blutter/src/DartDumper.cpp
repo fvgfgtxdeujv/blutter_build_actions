@@ -1359,9 +1359,15 @@ std::string DartDumper::ObjectToString(dart::Object& obj, bool simpleForm, bool 
 		const auto& simd = dart::Float64x2::Cast(obj);
 		return std::format("Float64x2: ({}, {})", simd.x(), simd.y());
 	}
-	case dart::kInstanceCid:
-		return std::format("Obj!Object@{:x}", (uint32_t)(intptr_t)obj.ptr());
-	// TODO: enum subclass
+	case dart::kInstanceCid: {
+		// A plain Object instance: use the real class name (with its defining
+		// library) instead of the generic "Object" placeholder.
+		auto dartCls = app.GetClass(cid);
+		const auto& url = dartCls->Library().url;
+		const auto libPrefix = url.empty() ? std::string() : std::format("[{}] ", url);
+		return std::format("Obj!{}{}@{:x}", libPrefix, dartCls->Name(), (uint32_t)(intptr_t)obj.ptr());
+	}
+	// enum subclass instances are handled by dumpInstance()
 	}
 
 	// many cids are instance. handling them after special classes.
@@ -1376,7 +1382,7 @@ std::string DartDumper::ObjectToString(dart::Object& obj, bool simpleForm, bool 
 			: std::format("UnhandledClass(cid={})", cid);
 	}
 
-	// TODO: print library and package prefix
+	// instance class name (with library prefix) is resolved by dumpInstance()
 	knownObjectPtrs.insert((intptr_t)obj.ptr());
 	return dumpInstance(obj, simpleForm, nestedObj, depth);
 }
@@ -1391,8 +1397,20 @@ std::string DartDumper::dumpInstance(dart::Object& obj, bool simpleForm, bool ne
 
 	const auto ptr = dart::UntaggedObject::ToAddr(obj.ptr());
 	DartType* dtype = app.typeDb->FindOrAdd(*dartCls, dart::Instance::Cast(obj));
+
+	// Prefix the defining library so an obfuscated class name can be traced
+	// back to its package (keep the concrete type arguments from ToString()).
+	const auto& url = dartCls->Library().url;
+	std::string typeName = url.empty() ? dtype->ToString() : std::format("[{}] {}", url, dtype->ToString());
+	// An enum instance carries its constant name in the `_name` field inherited
+	// from `_Enum`; render `EnumName.value` instead of an opaque instance.
+	if (dartCls->Type() == DartClass::ENUM) {
+		std::string valueName = enumValueName(obj, *dartCls);
+		if (!valueName.empty())
+			typeName += "." + valueName;
+	}
 	if (simpleForm || (!nestedObj && depth > 0)) {
-		return std::format("Obj!{}@{:x}", dtype->ToString(), (uint32_t)(intptr_t)obj.ptr());
+		return std::format("Obj!{}@{:x}", typeName, (uint32_t)(intptr_t)obj.ptr());
 	}
 
 	std::vector<DartClass*> parents;
@@ -1404,7 +1422,7 @@ std::string DartDumper::dumpInstance(dart::Object& obj, bool simpleForm, bool ne
 
 	std::ostringstream ss;
 	int fieldCnt = 0;
-	ss << std::format("Obj!{}@{:x} : {{\n", dtype->ToString(), (uint32_t)(intptr_t)obj.ptr());
+	ss << std::format("Obj!{}@{:x} : {{\n", typeName, (uint32_t)(intptr_t)obj.ptr());
 	auto offset = dart::Instance::NextFieldOffset();
 	for (auto parent : parents | std::views::reverse) {
 		if (offset < parent->Size()) {
@@ -1432,6 +1450,42 @@ std::string DartDumper::dumpInstance(dart::Object& obj, bool simpleForm, bool ne
 	ss << closeIndent << "}";
 
 	return ss.str();
+}
+
+std::string DartDumper::enumValueName(dart::Object& obj, DartClass& enumCls)
+{
+	// An enum value is an instance of the concrete enum class whose only
+	// instance state comes from the VM-internal `_Enum` base: an int `index`
+	// and the constant `_name` string. Walk the instance's field slots (the
+	// same way walkObject does) and return the first string found, which is
+	// `_name`; the int `index` slot is not a heap object and is skipped. No
+	// field-name metadata is needed, which matters because `_Enum` is not
+	// mirrored into DartClass.
+	auto zone = dart::Thread::Current()->zone();
+	const auto ptr = dart::UntaggedObject::ToAddr(obj.ptr());
+	const auto bitmap = enumCls.UnboxedFieldsBitmap();
+	const auto typeArgsOffset = enumCls.TypeArgumentsOffset();
+	intptr_t offset = dart::Instance::NextFieldOffset();
+	while (offset < enumCls.Size()) {
+		if (bitmap.Get(offset / dart::kCompressedWordSize)) {
+			// unboxed int64/double: always 8 bytes, never a pointer
+			offset += sizeof(int64_t);
+			continue;
+		}
+		if (offset != typeArgsOffset) {
+			const auto slot = reinterpret_cast<const dart::CompressedObjectPtr*>(ptr + offset);
+			if (slot->IsHeapObject()) {
+				const auto objPtr = slot->Decompress(app.heap_base());
+				if (objPtr != nullptr && objPtr.GetClassId() != dart::kNullCid) {
+					const auto& value = dart::Object::Handle(zone, objPtr);
+					if (value.IsString())
+						return dart::String::Cast(value).ToCString();
+				}
+			}
+		}
+		offset += dart::kCompressedWordSize;
+	}
+	return std::string();
 }
 
 std::string DartDumper::dumpInstanceFields(dart::Object& obj, DartClass& dartCls, intptr_t ptr, intptr_t offset, bool simpleForm, bool nestedObj, int depth)
