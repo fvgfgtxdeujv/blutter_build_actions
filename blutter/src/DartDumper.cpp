@@ -979,14 +979,24 @@ void DartDumper::DumpCode(const char* out_dir)
 						else {
 							while (il_itr != il_end && (*il_itr)->Start() < asmText.addr) {
 								if ((*il_itr)->Kind() != ILInstr::Unknown) {
-									of << std::format("{:#x}", (*il_itr)->Start()) << ": " << (*il_itr)->ToString() << "\n";
+									of << std::format("{:#x}", (*il_itr)->Start()) << ": " << (*il_itr)->ToString();
+									// mirror the object-pool description onto the IL line
+									// so a bare "[pp+off]" reference is annotated too
+									const auto ilPoolOffset = (*il_itr)->PoolOffset();
+									if (ilPoolOffset >= 0)
+										of << "  ; " << getPoolObjectDescription(ilPoolOffset);
+									of << "\n";
 									of << "    // ";
 								}
 								++il_itr;
 							}
 							if (il_itr != il_end && (*il_itr)->Start() == asmText.addr) {
 								if ((*il_itr)->Kind() != ILInstr::Unknown) {
-									of << std::format("{:#x}", asmText.addr) << ": " << (*il_itr)->ToString() << "\n";
+									of << std::format("{:#x}", asmText.addr) << ": " << (*il_itr)->ToString();
+									const auto ilPoolOffset = (*il_itr)->PoolOffset();
+									if (ilPoolOffset >= 0)
+										of << "  ; " << getPoolObjectDescription(ilPoolOffset);
+									of << "\n";
 									of << "    //     ";
 									range = (*il_itr)->Range();
 								}

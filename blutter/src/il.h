@@ -49,6 +49,9 @@ public:
 	virtual ~ILInstr() {}
 
 	virtual std::string ToString() = 0;
+	// Object-pool offset this instruction references (if any), or -1. Used by
+	// the asm view to mirror the pool description onto the IL line.
+	virtual intptr_t PoolOffset() const { return -1; }
 	ILKind Kind() const { return kind; }
 	uint64_t Start() const { return addrRange.start; }
 	uint64_t End() const { return addrRange.end; }
@@ -193,6 +196,8 @@ public:
 	virtual std::string ToString() {
 		return std::format("[PP+{:#x}] = {}", offset, srcReg.Name());
 	}
+
+	intptr_t PoolOffset() const { return offset; }
 
 	A64::Register srcReg;
 	int64_t offset;
@@ -545,9 +550,8 @@ public:
 
 class InitLateStaticFieldInstr : public ILInstr {
 public:
-	// TODO: add pool object offset or pointer
-	InitLateStaticFieldInstr(AddrRange addrRange, VarStorage dst, DartField& field)
-		: ILInstr(InitLateStaticField, addrRange), dst(dst), field(field) {}
+	InitLateStaticFieldInstr(AddrRange addrRange, VarStorage dst, DartField& field, intptr_t poolOffset = -1)
+		: ILInstr(InitLateStaticField, addrRange), dst(dst), field(field), poolOffset(poolOffset) {}
 	InitLateStaticFieldInstr() = delete;
 	InitLateStaticFieldInstr(InitLateStaticFieldInstr&&) = delete;
 	InitLateStaticFieldInstr& operator=(const InitLateStaticFieldInstr&) = delete;
@@ -556,6 +560,9 @@ public:
 		return std::format("{} = InitLateStaticField({:#x}) // {}", dst.Name(), field.Offset(), field.FullName());
 	}
 
+	// pool offset of the Field object used by this late-static-field init
+	intptr_t PoolOffset() const { return poolOffset; }
+
 	std::string ValueExpression() {
 		return field.Name();
 	}
@@ -563,6 +570,7 @@ public:
 protected:
 	VarStorage dst;
 	DartField& field;
+	intptr_t poolOffset;
 };
 
 class LoadStaticFieldInstr : public ILInstr {

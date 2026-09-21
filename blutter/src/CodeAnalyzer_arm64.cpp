@@ -3107,7 +3107,7 @@ std::unique_ptr<ILInstr> FunctionAnalyzer::processLoadFieldTableInstr(AsmIterato
 					}
 					INSN_ASSERT(insn.address() == cont_addr);
 
-					return std::make_unique<InitLateStaticFieldInstr>(insn.Wrap(marker.Take()), dstReg, dartField);
+					return std::make_unique<InitLateStaticFieldInstr>(insn.Wrap(marker.Take()), dstReg, dartField, objPoolInstr.item.storage.offset);
 				}
 			}
 			else {

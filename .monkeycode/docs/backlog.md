@@ -1,7 +1,7 @@
 # 改进待办（Backlog）
 
-记录时间：2026-09-17（2026-09-20 更新 C/D 落地并标注提交号）
-分支基线：`master` `3596f9e`（A/B 见 `3596f9e`，C/D 见 `36b1217`，DartTypes/格式化修复见 `84d135a`）
+记录时间：2026-09-17（2026-09-21 更新 C/D 提交号与 E 落地）
+分支基线：`master` `77f894c`（A/B 见 `3596f9e`，C/D 见 `36b1217`，DartTypes/格式化修复见 `84d135a`，E 见本节状态）
 用途：把「界定清晰、改动小」的候选改进集中登记，避免散落在代码 TODO 里。每项落地后请在此标注提交号，并同步更新 `README.md` / `semantic-clue-collection.md` 的相关段落。
 
 ## 0. 已排除（避免重复）
@@ -70,12 +70,14 @@
 
 ### E. IL 行补池对象描述
 
-- 位置：`blutter/src/il.h:548` `// TODO: add pool object offset or pointer`
+- 位置：`blutter/src/il.h:548` `// TODO: add pool object offset or pointer`（已随本项移除）
 - 现状：IL 文本只有 `[pp+off]`；asm 路径已用 `getPoolObjectDescription` 附描述（`DartDumper.cpp` asm extra）
 - 做法：IL 的 pool 引用行附同等描述（字符串/Field/Function 短名）
 - 注意：`PseudoCode.h` 明确记录过——伪代码视图刻意不调用 `getPoolObjectDescription`，避免强制物化类型；此改动仅限 IL/asm 展示路径，勿动伪代码的惰性策略
 - 工作量：小
 - 验证：回归 PASS=66；伪代码默认输出零漂移
+- 状态：**已落地**（2026-09-21，未提交）。实现：`ILInstr` 新增 `virtual intptr_t PoolOffset()`（默认 -1），`StoreObjectPoolInstr` 返回其池偏移，`InitLateStaticFieldInstr` 新增构造参数 `poolOffset`（arm64 由 `objPoolInstr.item.storage.offset` 传入，默认 -1 兼容其他调用点）；`DumpCode` 打印 IL 行时若 `PoolOffset() >= 0` 则追加 `  ; ` + `getPoolObjectDescription(offset)`，与 asm 行的池描述一致
+- 落地实测：zip(arm64) 中受影响行数精确等于两类指令之和——`InitLateStaticField` 3070 + `StoreObjectPool` 138 = 3208，无第三类被波及；例：`[PP+0x75178] = r0  ; [pp+0x75178] IMM: 0x0`、`r0 = InitLateStaticField(0x9a4) // [FNo] Ula::_baf  ; [pp+0x13f68] Field <...>: static late final (offset: 0x9a4)`。winapp(x64) 不产出这两类池引用 IL（`InitLateStaticField()` 为空参形式，走另一路径），无变化；`ToString()` 未改动，伪代码零漂移；回归 PASS=66 FAIL=0
 
 ### F. 伪代码后向跳转识别为循环
 
@@ -98,7 +100,7 @@
 ## 4. 建议批次
 
 1. 第一批：A + B（同在 `ObjectToString` 函数族，可读性 + 健壮性一次拿到，风险低、可断言）——**已落地**
-2. 第二批：C + D + E（展示层小追加）——C + D **已落地**，E 待做
+2. 第二批：C + D + E（展示层小追加）——C + D + E **全部已落地**
 3. 伪代码主线：F → 之后视情况推进第 1 节控制流重建
 4. G 视需求排期
 
