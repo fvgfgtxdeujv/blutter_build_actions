@@ -20,7 +20,8 @@
 | `packages/` | 构建产物：Dart VM 头文件 + 静态库（`find_package` 定位，不入库） |
 | `bin/` | blutter 可执行文件输出目录（不入库） |
 | `dartsdk/`、`build/`、`cross/` | Dart SDK 检出、构建目录与交叉 toolchain（不入库） |
-| `定制版blutter.zip` | 精简运行包（`blutter.py` + Frida 模板 + README / LICENSE） |
+| `定制版blutter.zip` | 精简运行包（`blutter.py` + Frida 模板 + README / LICENSE / THIRD_PARTY_NOTICES） |
+| `THIRD_PARTY_NOTICES.md` | 第三方组件（blutter、blutter-windows、Taywee/args、Dart SDK、Capstone、ICU）的版权与许可声明 |
 | `.github/workflows/` | Actions：单版本构建 / 批量构建 / 获取待构建版本 |
 | `.monkeycode/` | 规格、文档与记忆 |
 
@@ -145,3 +146,9 @@ blutter_dartvm3.3.4_android_arm64 -i libapp.so -o out -p
 - **版本兼容**：与官方 blutter 支持的 Dart 版本一致
 - **解析健壮性**：SIMD typed array（`Float32x4` / `Int32x4` / `Float64x2`）与未处理的内部类不再中止整次解析，分别输出元素值 / `UnhandledClass(name, cid=N)` 占位；手工 cmake 构建会在 `find_package` 后自动探测 `HAS_TYPE_REF` / `HAS_RECORD_TYPE`，避免调用方漏传宏导致 `Invalid abstract type` 中止（`scripts/build.py` 显式传值时以后者为准）
 - **输出目录**：运行 blutter 后生成 `asm/`（反汇编；加 `-p` 时每个函数另含 `// pseudo:` 伪代码注释段）、`objs.txt` / `pp.txt`（Object Pool 转储）；`blutter_frida.js`（Frida 脚本，Android 手机端 hook 用）仅解析安卓的目标生成，解析 Windows 桌面 `app.so` 的目标不生成
+
+## 许可证
+
+本仓库以 GNU GPLv3 发布，全文见 `LICENSE`。
+
+仓库源码基于上游 MIT 项目（blutter / blutter-windows）修改而来，并包含 Dart SDK / Dart VM、Taywee/args、Capstone、ICU 等第三方组件；这些组件的版权声明与许可全文按 GPLv3 要求保留在 `THIRD_PARTY_NOTICES.md`。
