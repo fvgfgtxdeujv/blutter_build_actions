@@ -1,12 +1,28 @@
 # Blutter 构建工作流
 
-基于 GitHub Actions 自动构建 [blutter](https://github.com/worawit/blutter) 二进制的仓库，支持 Linux（aarch64）与 Windows（x64）两类宿主编译环境、单版本构建与多版本批量构建。
+基于 GitHub Actions 自动构建 [blutter](https://github.com/worawit/blutter) 二进制的仓库，同时支持在本地用仓库根的 `blutter.py` 从源码构建；覆盖 Linux（aarch64）与 Windows（x64）两类宿主编译环境、单版本构建与多版本批量构建。
 
 源码合并自 [1903247335/blutter-windows](https://github.com/1903247335/blutter-windows) 的 Flutter Windows (x64) 支持：除 Android arm64 快照解析（保持兼容）外，还可分析 Flutter Windows 桌面应用的 `data/app.so`（x64）。`scripts/build.py` 的目标拆分为「产物架构」与「解析架构」两维：`--arch aarch64`（安卓，压缩指针）、`--arch windows_x64`（Windows 宿主解析 x64）、`--arch x86_64`（Linux x64 宿主解析 x64）。
 
 ## 目标范围
 
 支持 **Android arm64** 与 **Flutter Windows 桌面 x64** 两类目标。不适配 iOS / macOS：Mach-O 解析、iOS 目录布局、Darwin 宿主编译等代码已整体移除，CI 矩阵与新增功能均不引入。
+
+## 仓库结构
+
+| 路径 | 说明 |
+|------|------|
+| `blutter/` | 定制版 blutter C++ 源码（`src/` 平铺；相较官方多出 x64 的 `CodeAnalyzer_x64.cpp`、`Disassembler_x64.cpp/.h`，arm64 分析器保持兼容） |
+| `blutter.py` | 运行 / 源码构建入口（`定制版blutter.zip` 内的同名文件即此文件的打包版本） |
+| `scripts/build.py` | 构建脚本：`clone-dart` / `generate-sources` / `build-dartvm` / `build-blutter` / `generate-toolchain` / `setup-icu` |
+| `scripts/CMakeLists.txt`、`scripts/dartvm_create_srclist.py` | Dart VM 的 CMake 模板与源清单生成 |
+| `scripts/frida.template.js`、`scripts/frida.windows.template.js` | 运行时 Frida 脚本模板（Android / Windows 各一） |
+| `packages/` | 构建产物：Dart VM 头文件 + 静态库（`find_package` 定位，不入库） |
+| `bin/` | blutter 可执行文件输出目录（不入库） |
+| `dartsdk/`、`build/`、`cross/` | Dart SDK 检出、构建目录与交叉 toolchain（不入库） |
+| `定制版blutter.zip` | 精简运行包（`blutter.py` + Frida 模板 + README / LICENSE） |
+| `.github/workflows/` | Actions：单版本构建 / 批量构建 / 获取待构建版本 |
+| `.monkeycode/` | 规格、文档与记忆 |
 
 ## 产物
 
@@ -42,11 +58,38 @@ Actions → **批量构建 Blutter** → Run workflow。参数：**Dart versions
 
 Actions → **获取待构建 Dart 版本**，运行后从日志末尾复制待构建版本列表，填入批量构建输入框。
 
+### 4. 本地从源码构建（不依赖 Actions）
+
+仓库根的 `blutter.py` 默认优先从 Releases 远程下载匹配二进制；下载不可用或失败时，用定制版 `blutter/src` 从源码构建（`--rebuild` 可跳过下载、强制重建）。源码构建内部复用 `scripts/build.py` 的四步流水线（与 `.github/workflows/build-dart-version.yml` 一致）：
+
+```
+python3 blutter.py <apk/lib目录/app目录或app.so> <输出目录> [--rebuild]
+```
+
+也可只跑构建步骤：
+
+```bash
+cd /workspace
+python3 scripts/build.py clone-dart 3.3.4
+python3 scripts/build.py generate-sources 3.3.4
+python3 scripts/build.py build-dartvm 3.3.4 --arch x86_64
+python3 scripts/build.py build-blutter 3.3.4 --arch x86_64
+```
+
+- `--arch`：`aarch64`（Android arm64）/ `x86_64`（Linux 宿主解析 x64）/ `windows_x64`（Windows 宿主解析 x64）；产物落 `bin/`
+- 构建依赖：cmake / ninja / git / clang-16 / libc++-16-dev / libc++abi-16-dev / libcapstone-dev / libicu-dev / ccache。没有 gcc-13（libstdc++ 缺 `std::format`）的发行版必须用 clang-16 + libc++，且 Dart VM 与 blutter 共用同一套 C++ 标准库，避免静态库 ABI 不一致
+- aarch64 交叉编译需预先准备 `/usr/aarch64-linux-gnu` sysroot（arm64 libc、ICU 与 aarch64 版 libc++）。Debian/Ubuntu 的 libc++ arm64 与 amd64 包在 `/usr/lib/llvm-*/lib` 共享路径冲突，multiarch 无法并存，Android arm64 建议在 arm64 主机或 CI 的 arm64 runner 上原生构建
+
 ## 定制版 blutter（`定制版blutter.zip`）
 
-精简运行包，解压后运行 `python3 blutter.py <apk/lib目录/app目录或app.so> <输出目录>`。自动检测目标类型（Android / Flutter Windows 桌面）与 Dart 版本，从仓库 Releases 下载匹配二进制（Linux 自动识别 `_22`/`_24`，Windows 下载 `_win.exe`，Windows 下首次运行自动补齐三个运行 dll）。下载源按国内/国外自动选择（Gitee 镜像 / GitHub 双源，失败自动切换），也可手动下载二进制放入 `$HOME/blutter/bin/`。
+精简运行包，解压后运行 `python3 blutter.py <apk/lib目录/app目录或app.so> <输出目录>`。自动检测目标类型（Android / Flutter Windows 桌面）与 Dart 版本，在 `$HOME/blutter/bin` 查找匹配二进制；缺失时优先从 Releases 远程下载（Linux 自动识别 `_22`/`_24`，Windows 下载 `_win.exe`，Windows 下首次运行自动补齐三个运行 dll），下载不可用或失败且处于完整源码检出（仓库根同时有 `scripts/build.py` 与 `blutter/`）时，再用定制版 `blutter/src` 从源码构建 dartvm + blutter。下载源按国内/国外自动选择（Gitee 镜像 / GitHub 双源，失败自动切换），也可手动下载二进制放入 `$HOME/blutter/bin/`。
 
+仓库根的 `blutter.py` 即本包的规范来源（打进 zip 的即此文件）：直接在完整源码检出中运行即可走「优先下载、失败再源码构建」的流程。
+
+- `--rebuild`：强制从源码重建 blutter 可执行文件（需完整仓库检出；`--no-analysis` 等无对应构建产物的变体仍走下载）
 - `--blacklist <file>`：语义黑名单文件透传给二进制（覆盖内置默认，`$BLUTTER_BLACKLIST` 环境变量同样生效）
+- `--no-analysis`：选择 no-analysis 变体产物（该变体无源码构建产物，始终下载）
+- `--dart-version <v>_<os>_<arch>`：无 libflutter 时手动指定 Dart 版本，如 `3.4.2_android_arm64`、`3.3.4_windows_x64`（仅支持 android / windows）
 - `-p` / `--pseudo`：为 `asm/` 输出追加 `// pseudo:` 伪代码注释段（默认关闭；透传给底层二进制，与 `--blacklist` 相同的传递方式）
 - iOS / macOS 输入直接报错拒绝（`App`/Mach-O 布局、`--dart-version <ver>_ios_*` 均已移除）
 - 解析产物含 `asm/`（带 `// semantic:` 注释；引用对象池的 IL 行会附上 `; [pp+off] <描述>`，与紧随其后的汇编行池描述一致，如 `[PP+0x75178] = r0  ; [pp+0x75178] IMM: 0x0`、`InitLateStaticField(0x9a4) // ...  ; [pp+0x13f68] Field <...>`）、`objs.txt`/`pp.txt`（实例字段在类元数据可用时标注字段名，形如 `_name (off_8): "value"`，无名字段保持 `off_x: value`；实例类名带定义库前缀，如 `Obj![package:foo/bar.dart] MyClass<int>@addr`，enum 值显示为 `EnumName.value` 而非不透明实例）、`strings_to_funcs.txt` 交叉表、`ida_script/`（`addNames.py` 语义重命名 + `semantic_names.txt` 追踪表）；Frida 动态 dump 脚本按目标生成：Android arm64 → `blutter_frida.js`，Flutter Windows 桌面 x64 → `blutter_frida_windows.js`（非压缩指针、栈参数读取、多锚点 base 发现；锚点阈值与运行时行为需在真实 Windows+Frida 环境复核）
