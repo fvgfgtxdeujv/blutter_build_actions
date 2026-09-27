@@ -9,7 +9,7 @@
 - 上游：https://github.com/worawit/blutter
 - 许可：MIT
 - 版权：Copyright (c) 2023 Worawit Wangwarunyoo
-- 涉及范围：`blutter/`（`src/`、`CMakeLists.txt`、`sourcelist.cmake`）、根 `blutter.py`，以及 `scripts/` 中的 `CMakeLists.txt`、`dartvm_create_srclist.py`、`frida.template.js`、`init_env_win.py`。
+- 涉及范围：`blutter/`（`src/`、`CMakeLists.txt`、`sourcelist.cmake`）、`定制版blutter.zip` 内的 `blutter.py`（运行入口），以及 `scripts/` 中的 `CMakeLists.txt`、`dartvm_create_srclist.py`、`frida.template.js`、`init_env_win.py`。
 
 ## 2. blutter-windows
 

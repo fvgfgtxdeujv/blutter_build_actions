@@ -1,6 +1,6 @@
 # Blutter 构建工作流
 
-基于 GitHub Actions 自动构建 [blutter](https://github.com/worawit/blutter) 二进制的仓库，同时支持在本地用仓库根的 `blutter.py` 从源码构建；覆盖 Linux（aarch64）与 Windows（x64）两类宿主编译环境、单版本构建与多版本批量构建。
+基于 GitHub Actions 自动构建 [blutter](https://github.com/worawit/blutter) 二进制的仓库，同时支持在本地用 `scripts/build.py` 从源码构建；覆盖 Linux（aarch64）与 Windows（x64）两类宿主编译环境、单版本构建与多版本批量构建。
 
 源码合并自 [1903247335/blutter-windows](https://github.com/1903247335/blutter-windows) 的 Flutter Windows (x64) 支持：除 Android arm64 快照解析（保持兼容）外，还可分析 Flutter Windows 桌面应用的 `data/app.so`（x64）。`scripts/build.py` 的目标拆分为「产物架构」与「解析架构」两维：`--arch aarch64`（安卓，压缩指针）、`--arch windows_x64`（Windows 宿主解析 x64）、`--arch x86_64`（Linux x64 宿主解析 x64）。
 
@@ -13,7 +13,6 @@
 | 路径 | 说明 |
 |------|------|
 | `blutter/` | 定制版 blutter C++ 源码（`src/` 平铺；相较官方多出 x64 的 `CodeAnalyzer_x64.cpp`、`Disassembler_x64.cpp/.h`，arm64 分析器保持兼容） |
-| `blutter.py` | 运行 / 源码构建入口（`定制版blutter.zip` 内的同名文件即此文件的打包版本） |
 | `scripts/build.py` | 构建脚本：`clone-dart` / `generate-sources` / `build-dartvm` / `build-blutter` / `generate-toolchain` / `setup-icu` |
 | `scripts/CMakeLists.txt`、`scripts/dartvm_create_srclist.py` | Dart VM 的 CMake 模板与源清单生成 |
 | `scripts/frida.template.js`、`scripts/frida.windows.template.js` | 运行时 Frida 脚本模板（Android / Windows 各一） |
@@ -61,13 +60,7 @@ Actions → **获取待构建 Dart 版本**，运行后从日志末尾复制待�
 
 ### 4. 本地从源码构建（不依赖 Actions）
 
-仓库根的 `blutter.py` 默认优先从 Releases 远程下载匹配二进制；下载不可用或失败时，用定制版 `blutter/src` 从源码构建（`--rebuild` 可跳过下载、强制重建）。源码构建内部复用 `scripts/build.py` 的四步流水线（与 `.github/workflows/build-dart-version.yml` 一致）：
-
-```
-python3 blutter.py <apk/lib目录/app目录或app.so> <输出目录> [--rebuild]
-```
-
-也可只跑构建步骤：
+用定制版 `blutter/src` 源码，通过 `scripts/build.py` 的四步流水线构建（与 `.github/workflows/build-dart-version.yml` 一致）：
 
 ```bash
 cd /workspace
@@ -78,14 +71,14 @@ python3 scripts/build.py build-blutter 3.3.4 --arch x86_64
 ```
 
 - `--arch`：`aarch64`（Android arm64）/ `x86_64`（Linux 宿主解析 x64）/ `windows_x64`（Windows 宿主解析 x64）；产物落 `bin/`
-- 构建依赖：cmake / ninja / git / clang-16 / libc++-16-dev / libc++abi-16-dev / libcapstone-dev / libicu-dev / ccache。没有 gcc-13（libstdc++ 缺 `std::format`）的发行版必须用 clang-16 + libc++，且 Dart VM 与 blutter 共用同一套 C++ 标准库，避免静态库 ABI 不一致
+- 构建依赖：cmake / ninja / git / clang-16 / libc++-16-dev / libc++abi-16-dev / libcapstone-dev / libicu-dev / ccache。没有 gcc-13（libstdc++ 缺 `std::format`）的发行版必须用 clang-16 + libc++，且 Dart VM 与 blutter 共用同一套 C++ 标准库，避免静态库 ABI 不一致。直接跑 `scripts/build.py` 时需自行 `export CC=clang-16 CXX=clang++-16 CXXFLAGS=-stdlib=libc++ LDFLAGS=-stdlib=libc++`；由包内 `blutter.py` 触发的构建会自动设置这套工具链环境
 - aarch64 交叉编译需预先准备 `/usr/aarch64-linux-gnu` sysroot（arm64 libc、ICU 与 aarch64 版 libc++）。Debian/Ubuntu 的 libc++ arm64 与 amd64 包在 `/usr/lib/llvm-*/lib` 共享路径冲突，multiarch 无法并存，Android arm64 建议在 arm64 主机或 CI 的 arm64 runner 上原生构建
 
 ## 定制版 blutter（`定制版blutter.zip`）
 
 精简运行包，解压后运行 `python3 blutter.py <apk/lib目录/app目录或app.so> <输出目录>`。自动检测目标类型（Android / Flutter Windows 桌面）与 Dart 版本，在 `$HOME/blutter/bin` 查找匹配二进制；缺失时优先从 Releases 远程下载（Linux 自动识别 `_22`/`_24`，Windows 下载 `_win.exe`，Windows 下首次运行自动补齐三个运行 dll），下载不可用或失败且处于完整源码检出（仓库根同时有 `scripts/build.py` 与 `blutter/`）时，再用定制版 `blutter/src` 从源码构建 dartvm + blutter。下载源按国内/国外自动选择（Gitee 镜像 / GitHub 双源，失败自动切换），也可手动下载二进制放入 `$HOME/blutter/bin/`。
 
-仓库根的 `blutter.py` 即本包的规范来源（打进 zip 的即此文件）：直接在完整源码检出中运行即可走「优先下载、失败再源码构建」的流程。
+运行入口 `blutter.py` 打包在 zip 内（仓库不再单独存放）：把包内 `blutter.py` 放到完整源码检出（仓库根有 `scripts/build.py` 与 `blutter/`）中运行，即可走「优先下载、失败再源码构建」的流程。
 
 - `--rebuild`：强制从源码重建 blutter 可执行文件（需完整仓库检出；`--no-analysis` 等无对应构建产物的变体仍走下载）
 - `--blacklist <file>`：语义黑名单文件透传给二进制（覆盖内置默认，`$BLUTTER_BLACKLIST` 环境变量同样生效）

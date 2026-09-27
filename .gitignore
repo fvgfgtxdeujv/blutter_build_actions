@@ -2,7 +2,7 @@
 packages/
 # Python 缓存
 __pycache__/
-# 本地构建产物（scripts/build.py / blutter.py --rebuild）
+# 本地构建产物（scripts/build.py）
 dartsdk/
 bin/
 cross/
