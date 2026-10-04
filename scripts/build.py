@@ -397,11 +397,14 @@ def _dart_lib_name(version, arch):
     return f"dartvm{version}_{_arch_suffix(arch)}"
 
 
-def build_dart_runtime(version, arch):
+def build_dart_runtime(version, arch, compressed_ptrs=None):
     """Build Dart runtime static library"""
     cross = is_cross_compile(arch)
     a = ARCH_MAP[arch]
-    print(f"[*] Building Dart runtime (target={a['os']}/{a['arch']}, cross={cross})...")
+    # Dart < 2.15 / Flutter < 2.8 的 Android arm64 未启用压缩指针（见 Flutter 2.5.3
+    # 引擎 tools/gn 未设置 dart_use_compressed_pointers），需要按目标快照的实际模式编译。
+    compressed = a['compressed_ptrs'] if compressed_ptrs is None else compressed_ptrs
+    print(f"[*] Building Dart runtime (target={a['os']}/{a['arch']}, cross={cross}, compressed_ptrs={compressed})...")
     clone_dir = SDK_DIR / f"v{version}"
     dart_lib_name = _dart_lib_name(version, arch)
     build_path = BUILD_DIR / dart_lib_name
@@ -411,7 +414,7 @@ def build_dart_runtime(version, arch):
     cmake_args = [
         CMAKE_CMD, "-GNinja", "-B", str(build_path),
         f"-DTARGET_OS={a['os']}", f"-DTARGET_ARCH={a['arch']}",
-        f"-DCOMPRESSED_PTRS={1 if a['compressed_ptrs'] else 0}",
+        f"-DCOMPRESSED_PTRS={1 if compressed else 0}",
         "-DCMAKE_BUILD_TYPE=Release",
         "--log-level=NOTICE",
         f"-DCMAKE_INSTALL_PREFIX={PROJECT_DIR / 'packages'}",
@@ -467,23 +470,34 @@ def detect_macros(version):
     return macros
 
 
-def build_blutter_binary(version, arch, macros):
+def build_blutter_binary(version, arch, macros, no_analysis=False, no_compressed_ptrs=False):
     """Build blutter executable"""
     cross = is_cross_compile(arch)
     dart_lib = _dart_lib_name(version, arch)
     blutter_arch = ARCH_MAP[arch]["blutter_arch"]
-    print(f"[*] Building blutter binary (arch={arch}, cross={cross}, blutter_arch={blutter_arch})...")
-    bin_name = f"blutter_{dart_lib}"
+    print(f"[*] Building blutter binary (arch={arch}, cross={cross}, blutter_arch={blutter_arch}, "
+          f"no_analysis={no_analysis}, no_compressed_ptrs={no_compressed_ptrs})...")
+    # 变体后缀与运行期 blutter.py 的 name_suffix 顺序一致：先压缩指针，再 no-analysis。
+    # Dart < 2.15 需要 no-analysis；Flutter < 2.8 的 Android arm64 未启用压缩指针，
+    # 还需 no-compressed-ptrs，二者组合为 _no-compressed-ptrs_no-analysis。
+    name_suffix = ""
+    if no_compressed_ptrs:
+        name_suffix += "_no-compressed-ptrs"
+    if no_analysis:
+        name_suffix += "_no-analysis"
+    bin_name = f"blutter_{dart_lib}{name_suffix}"
     build_path = BUILD_DIR / bin_name
     build_path.mkdir(parents=True, exist_ok=True)
 
     cmake_args = [
         CMAKE_CMD, "-GNinja", "-B", str(build_path),
-        f"-DDARTLIB={dart_lib}", "-DNAME_SUFFIX=",
+        f"-DDARTLIB={dart_lib}", f"-DNAME_SUFFIX={name_suffix}",
         f"-DBLUTTER_ARCH={blutter_arch}",
         "-DCMAKE_BUILD_TYPE=Release", "--log-level=NOTICE",
         str(PROJECT_DIR / "blutter"),
     ]
+    if no_analysis:
+        cmake_args.append("-DNO_CODE_ANALYSIS=1")
     cmake_args += _cmake_launcher_args()
 
     env = os.environ.copy()
@@ -521,9 +535,15 @@ def main():
     p = sub.add_parser("build-dartvm")
     p.add_argument("version")
     p.add_argument("--arch", choices=["aarch64", "x86_64", "windows_x64"], default="aarch64")
+    p.add_argument("--no-compressed-ptrs", action="store_true",
+                   help="Build the VM without compressed pointers (required by Flutter < 2.8 / Dart < 2.15 Android arm64)")
     p = sub.add_parser("build-blutter")
     p.add_argument("version")
     p.add_argument("--arch", choices=["aarch64", "x86_64", "windows_x64"], default="aarch64")
+    p.add_argument("--no-analysis", action="store_true",
+                   help="Build the no-analysis variant (required by Dart < 2.15)")
+    p.add_argument("--no-compressed-ptrs", action="store_true",
+                   help="Build against the non-compressed-pointers VM (required by Flutter < 2.8 / Dart < 2.15 Android arm64)")
 
     args = parser.parse_args()
 
@@ -539,10 +559,13 @@ def main():
     elif args.command == "generate-sources":
         generate_sources(args.version)
     elif args.command == "build-dartvm":
-        build_dart_runtime(args.version, args.arch)
+        compressed_ptrs = False if args.no_compressed_ptrs else None
+        build_dart_runtime(args.version, args.arch, compressed_ptrs=compressed_ptrs)
     elif args.command == "build-blutter":
         macros = detect_macros(args.version)
-        build_blutter_binary(args.version, args.arch, macros)
+        build_blutter_binary(args.version, args.arch, macros,
+                             no_analysis=args.no_analysis,
+                             no_compressed_ptrs=args.no_compressed_ptrs)
 
 
 if __name__ == "__main__":

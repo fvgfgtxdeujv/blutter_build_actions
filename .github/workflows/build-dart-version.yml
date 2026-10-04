@@ -76,7 +76,18 @@ jobs:
           # 主 worker 先检查每个版本：本目标产物已存在则从编译列表排除
           FILTERED=()
           for ver in "${ALL[@]}"; do
-            asset="blutter_dartvm${ver}_${DART_NAME}_${SUFFIX}${EXT}"
+            # Dart <2.15 的产物带变体后缀：Android arm64 为非压缩指针 + no-analysis，
+            # Windows x64 已是非压缩指针，仅需 no-analysis。
+            MAJ=${ver%%.*}; REST=${ver#*.}; MIN=${REST%%.*}
+            NAME_SUFFIX=""
+            if [ "$MAJ" -eq 2 ] && [ "$MIN" -lt 15 ]; then
+              if [ "$DART_NAME" = "android_arm64" ]; then
+                NAME_SUFFIX="_no-compressed-ptrs_no-analysis"
+              else
+                NAME_SUFFIX="_no-analysis"
+              fi
+            fi
+            asset="blutter_dartvm${ver}_${DART_NAME}${NAME_SUFFIX}_${SUFFIX}${EXT}"
             MISSING=()
             grep -Fqx "${ver}|${asset}" /tmp/releases.txt || MISSING+=("$asset")
             if [ ${#MISSING[@]} -eq 0 ]; then
@@ -265,13 +276,28 @@ jobs:
           fi
 
           for ver in ${{ steps.shard.outputs.subset }}; do
-            asset="blutter_dartvm${ver}_${DART_NAME}_${RUNNER_SUFFIX}${EXT}"
+            # <2.15 的 Dart 需要 no-analysis 变体；Flutter <2.8 的 Android arm64
+            # 未启用压缩指针，构建 dartvm 与 blutter 时都要加 --no-compressed-ptrs。
+            VM_EXTRA=""
+            BLUTTER_EXTRA=""
+            NAME_SUFFIX=""
+            MAJ=${ver%%.*}; REST=${ver#*.}; MIN=${REST%%.*}
+            if [ "$MAJ" -eq 2 ] && [ "$MIN" -lt 15 ]; then
+              BLUTTER_EXTRA="--no-analysis"
+              NAME_SUFFIX="_no-analysis"
+              if [ "$BUILD_ARCH" = "aarch64" ]; then
+                VM_EXTRA="--no-compressed-ptrs"
+                BLUTTER_EXTRA="--no-analysis --no-compressed-ptrs"
+                NAME_SUFFIX="_no-compressed-ptrs_no-analysis"
+              fi
+            fi
+            asset="blutter_dartvm${ver}_${DART_NAME}${NAME_SUFFIX}_${RUNNER_SUFFIX}${EXT}"
             echo "===== 开始构建 Dart $ver (arch=$BUILD_ARCH, 产物=$asset) ====="
             if $PY scripts/build.py clone-dart "$ver" \
                && $PY scripts/build.py generate-sources "$ver" \
-               && $PY scripts/build.py build-dartvm "$ver" --arch "$BUILD_ARCH" \
-               && $PY scripts/build.py build-blutter "$ver" --arch "$BUILD_ARCH"; then
-              mv "bin/blutter_dartvm${ver}_${SRC_NAME}${EXT}" "bin/$asset"
+               && $PY scripts/build.py build-dartvm "$ver" --arch "$BUILD_ARCH" $VM_EXTRA \
+               && $PY scripts/build.py build-blutter "$ver" --arch "$BUILD_ARCH" $BLUTTER_EXTRA; then
+              mv "bin/blutter_dartvm${ver}_${SRC_NAME}${NAME_SUFFIX}${EXT}" "bin/$asset"
               bin_file="bin/$asset"
               echo "===== 发布 $ver ($bin_file) ====="
               if gh release create "$ver" "$bin_file" --title "blutter $ver" 2>/dev/null; then

@@ -101,25 +101,39 @@ jobs:
       - name: 生成 CMake 源文件
         run: python3 scripts/build.py generate-sources "${{ env.DART_VERSION }}"
 
+      - name: 解析版本变体（Dart <2.15）
+        run: |
+          VER="${DART_VERSION}"
+          MAJ=${VER%%.*}; REST=${VER#*.}; MIN=${REST%%.*}
+          if [ "$MAJ" -eq 2 ] && [ "$MIN" -lt 15 ]; then
+            echo "VM_EXTRA=--no-compressed-ptrs" >> $GITHUB_ENV
+            echo "BLUTTER_EXTRA=--no-analysis --no-compressed-ptrs" >> $GITHUB_ENV
+            echo "BIN_SUFFIX=_no-compressed-ptrs_no-analysis" >> $GITHUB_ENV
+          else
+            echo "VM_EXTRA=" >> $GITHUB_ENV
+            echo "BLUTTER_EXTRA=" >> $GITHUB_ENV
+            echo "BIN_SUFFIX=" >> $GITHUB_ENV
+          fi
+
       - name: 构建 Dart VM
-        run: python3 scripts/build.py build-dartvm "${{ env.DART_VERSION }}" --arch aarch64
+        run: python3 scripts/build.py build-dartvm "${{ env.DART_VERSION }}" --arch aarch64 ${{ env.VM_EXTRA }}
 
       - name: 构建 blutter
-        run: python3 scripts/build.py build-blutter "${{ env.DART_VERSION }}" --arch aarch64
+        run: python3 scripts/build.py build-blutter "${{ env.DART_VERSION }}" --arch aarch64 ${{ env.BLUTTER_EXTRA }}
 
       - name: 打包上传 packages (可选)
         if: inputs.upload_packages == true
         run: |
-          mv "bin/blutter_dartvm${{ env.DART_VERSION }}_android_arm64" "bin/blutter_dartvm${{ env.DART_VERSION }}_android_arm64_${{ env.RUNNER_SUFFIX }}"
-          zip -r "blutter_dartvm${{ env.DART_VERSION }}_android_arm64_${{ env.RUNNER_SUFFIX }}.zip" bin packages
+          mv "bin/blutter_dartvm${{ env.DART_VERSION }}_android_arm64${{ env.BIN_SUFFIX }}" "bin/blutter_dartvm${{ env.DART_VERSION }}_android_arm64${{ env.BIN_SUFFIX }}_${{ env.RUNNER_SUFFIX }}"
+          zip -r "blutter_dartvm${{ env.DART_VERSION }}_android_arm64${{ env.BIN_SUFFIX }}_${{ env.RUNNER_SUFFIX }}.zip" bin packages
 
           echo "打包完成:"
-          unzip -l "blutter_dartvm${{ env.DART_VERSION }}_android_arm64_${{ env.RUNNER_SUFFIX }}.zip"
+          unzip -l "blutter_dartvm${{ env.DART_VERSION }}_android_arm64${{ env.BIN_SUFFIX }}_${{ env.RUNNER_SUFFIX }}.zip"
 
       - name: 上传单个二进制 (不打包)
         if: inputs.upload_packages == false
         run: |
-          mv "bin/blutter_dartvm${{ env.DART_VERSION }}_android_arm64" "blutter_dartvm${{ env.DART_VERSION }}_android_arm64_${{ env.RUNNER_SUFFIX }}"
+          mv "bin/blutter_dartvm${{ env.DART_VERSION }}_android_arm64${{ env.BIN_SUFFIX }}" "blutter_dartvm${{ env.DART_VERSION }}_android_arm64${{ env.BIN_SUFFIX }}_${{ env.RUNNER_SUFFIX }}"
 
       - name: 创建 Release
         if: inputs.upload_release == true
@@ -153,16 +167,31 @@ jobs:
         with:
           dart_version: ${{ env.DART_VERSION }}
 
+      - name: 解析版本变体（Dart <2.15）
+        shell: pwsh
+        run: |
+          $ver = "${{ env.DART_VERSION }}"
+          $p = $ver.Split('.')
+          if ([int]$p[0] -eq 2 -and [int]$p[1] -lt 15) {
+            "VM_EXTRA=--no-compressed-ptrs" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+            "BLUTTER_EXTRA=--no-analysis --no-compressed-ptrs" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+            "BIN_SUFFIX=_no-compressed-ptrs_no-analysis" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          } else {
+            "VM_EXTRA=" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+            "BLUTTER_EXTRA=" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+            "BIN_SUFFIX=" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          }
+
       - name: 构建 Dart VM (aarch64)
-        run: python scripts/build.py build-dartvm ${{ env.DART_VERSION }} --arch aarch64
+        run: python scripts/build.py build-dartvm ${{ env.DART_VERSION }} --arch aarch64 ${{ env.VM_EXTRA }}
 
       - name: 构建 blutter (aarch64)
-        run: python scripts/build.py build-blutter ${{ env.DART_VERSION }} --arch aarch64
+        run: python scripts/build.py build-blutter ${{ env.DART_VERSION }} --arch aarch64 ${{ env.BLUTTER_EXTRA }}
 
       - name: 重命名产物为 _win 命名（直接上传 exe，运行时 dll 由 blutter.py 从仓库 build/ 目录下载）
         shell: pwsh
         run: |
-          Rename-Item -Path "bin/blutter_dartvm${{ env.DART_VERSION }}_android_arm64.exe" -NewName "blutter_dartvm${{ env.DART_VERSION }}_android_arm64_win.exe"
+          Rename-Item -Path "bin/blutter_dartvm${{ env.DART_VERSION }}_android_arm64${{ env.BIN_SUFFIX }}.exe" -NewName "blutter_dartvm${{ env.DART_VERSION }}_android_arm64${{ env.BIN_SUFFIX }}_win.exe"
           Get-ChildItem bin | ForEach-Object { Write-Host $_.Name }
 
       - name: 打包上传 packages (可选)
@@ -219,16 +248,29 @@ jobs:
         with:
           dart_version: ${{ env.DART_VERSION }}
 
+      - name: 解析版本变体（Dart <2.15）
+        shell: pwsh
+        run: |
+          $ver = "${{ env.DART_VERSION }}"
+          $p = $ver.Split('.')
+          if ([int]$p[0] -eq 2 -and [int]$p[1] -lt 15) {
+            "BLUTTER_EXTRA=--no-analysis" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+            "BIN_SUFFIX=_no-analysis" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          } else {
+            "BLUTTER_EXTRA=" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+            "BIN_SUFFIX=" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          }
+
       - name: 构建 Dart VM（windows_x64，用于 Flutter Windows 桌面 app.so）
         run: python scripts/build.py build-dartvm ${{ env.DART_VERSION }} --arch windows_x64
 
       - name: 构建 blutter（windows_x64）
-        run: python scripts/build.py build-blutter ${{ env.DART_VERSION }} --arch windows_x64
+        run: python scripts/build.py build-blutter ${{ env.DART_VERSION }} --arch windows_x64 ${{ env.BLUTTER_EXTRA }}
 
       - name: 重命名产物为 _win 命名
         shell: pwsh
         run: |
-          Rename-Item -Path "bin/blutter_dartvm${{ env.DART_VERSION }}_windows_x64.exe" -NewName "blutter_dartvm${{ env.DART_VERSION }}_windows_x64_win.exe"
+          Rename-Item -Path "bin/blutter_dartvm${{ env.DART_VERSION }}_windows_x64${{ env.BIN_SUFFIX }}.exe" -NewName "blutter_dartvm${{ env.DART_VERSION }}_windows_x64${{ env.BIN_SUFFIX }}_win.exe"
           Get-ChildItem bin | ForEach-Object { Write-Host $_.Name }
 
       - name: 创建 Release
