@@ -136,7 +136,7 @@ blutter_dartvm3.3.4_android_arm64 -i libapp.so -o out -p
 
 ## 其他
 
-- **版本兼容**：与官方 blutter 支持的 Dart 版本一致，下界为 Dart 2.14.x；其中 2.14.x 使用 no-analysis 变体（仅 dump Object Pool，不做反汇编分析），且因 Flutter <2.8 未启用压缩指针，产物为 `_no-compressed-ptrs_no-analysis`
+- **版本兼容**：与官方 blutter 支持的 Dart 版本一致，下界为 Dart 2.14.x。其中 2.14.x 使用 no-analysis 变体（仅 dump Object Pool，不做反汇编分析），且因 Flutter <2.8 未启用压缩指针，产物为 `_no-compressed-ptrs_no-analysis`；3.0~3.3 由 `scripts/build.py` 自动探测宏后编译（默认回归版本 3.3.4 即属该区间）
 - **解析健壮性**：SIMD typed array（`Float32x4` / `Int32x4` / `Float64x2`）与未处理的内部类不再中止整次解析，分别输出元素值 / `UnhandledClass(name, cid=N)` 占位；手工 cmake 构建会在 `find_package` 后自动探测 `HAS_TYPE_REF` / `HAS_RECORD_TYPE`，避免调用方漏传宏导致 `Invalid abstract type` 中止（`scripts/build.py` 显式传值时以后者为准）
 - **输出目录**：运行 blutter 后生成 `asm/`（反汇编；加 `-p` 时每个函数另含 `// pseudo:` 伪代码注释段）、`objs.txt` / `pp.txt`（Object Pool 转储）；`blutter_frida.js`（Frida 脚本，Android 手机端 hook 用）仅解析安卓的目标生成，解析 Windows 桌面 `app.so` 的目标不生成
 

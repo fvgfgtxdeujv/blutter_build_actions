@@ -20,7 +20,8 @@ jobs:
             | sort -V | uniq > /tmp/all_versions.txt
 
           # 过滤低于 2.14 的版本（2.14 起支持：Dart <2.15 使用 no-analysis，
-          # Flutter <2.8 的 Android arm64 另需 no-compressed-ptrs）
+          # Flutter <2.8 的 Android arm64 另需 no-compressed-ptrs）。
+          # 3.x 不做区间排除：本仓库 scripts/build.py 会自动探测宏，3.0~3.3 同样纳入构建。
           awk -F. '$1 > 2 || ($1 == 2 && $2 >= 14)' /tmp/all_versions.txt > /tmp/filtered.txt
 
           # 获取仓库已有 Release 的 tag（GitHub API 分页拉取全部，不依赖 gh CLI；

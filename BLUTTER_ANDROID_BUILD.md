@@ -167,6 +167,25 @@ python3 build_jnilibs_bionic.py
 | 3.3.0~3.3.4 | 同上，原版 Blutter 同样不支持 |
 | 2.0~2.13 | Dart < 2.14 **无指针压缩**（compressed pointers），与 blutter 内存模型结构性冲突（见下节） |
 
+> **订正说明（2026-10）**：上表 `3.0.0~3.3.4` 两行只成立于「构建端不做头文件宏探测、
+> 固定引用上述 API」的场景；就源码本身而言，这两处调用均在 `#ifdef` 保护内：
+>
+> - `DartTypes.cpp:236` 仅在 `HAS_TYPE_REF` 未定义时才引用 `UntaggedTypeParameter::owner()`，
+>   而 `HAS_TYPE_REF` 由 `class_id.h` 是否有 `V(TypeRef)` 探测得到。Dart 3.0.0 仍含
+>   `V(TypeRef)` → 走 `bound()`；Dart 3.1.0 起移除 `TypeRef` → 走 `owner()`，而 `owner()`
+>   正是 3.1.0 才加入（该版本 `TypeParameter` 末尾注释即 `// 'owner' is a Class or FunctionType`）。
+> - `CodeAnalyzer_arm64.cpp:2106` 仅在 `NO_METHOD_EXTRACTOR_STUB` 定义时才引用
+>   `Thread::empty_type_arguments_offset()`，该宏只在 `object_store.h` 缺
+>   `build_generic_method_extractor_code)` 时定义。Dart 3.1~3.3 的 `object_store.h` 仍含该
+>   stub → 走对象池路径；Dart 3.4.0 起才走 `empty_type_arguments_offset()`，而
+>   `Thread::empty_type_arguments_` 字段也正好是 3.4.0 才加入 `CACHED_NON_VM_STUB_LIST`。
+>
+> 因此只要构建端按目标头文件自动探测宏（如 `blutter_build_actions` 仓库的
+> `scripts/build.py` 中的 `detect_macros()`），Dart 3.0.0~3.3.4 均可编译——该仓库的默认
+> 版本与回归样本就是 3.3.4（`blutter_dartvm3.3.4_android_arm64` / `_linux_x64`），已实测
+> 构建并解析样本成功。真正结构性不支持的只有 Dart < 2.14（无指针压缩）。若某个 bionic
+> 构建脚本采用固定宏集合，则应先补齐上述两处宏探测，再把 3.0~3.3 判为可用。
+
 ### 2.13.x 及更早（不可行 ❌）
 
 实测 Dart 2.13.4：**dartvm 静态库可编译，但 blutter 无法编译**，根因是 Dart < 2.14 不支持指针压缩。
