@@ -184,59 +184,59 @@ LibAppInfo ElfHelper::findSnapshots(const uint8_t* elf)
 	if (hdr->section_table_entry_size != sizeof(SectionHeader))
 		throw std::invalid_argument("ELF: Invalid section entry size");
 
-	const auto* section = (SectionHeader*)(elf + hdr->section_table_offset);
+	const auto* sections = (const SectionHeader*)(elf + hdr->section_table_offset);
 	const auto sh_num = hdr->num_section_headers;
 
-	// find .dynstr and .dynsym sections, so we can map the section names
-	const char* dynstr = nullptr;
-	const Symbol* dynsym = nullptr;
-	const Symbol* dynsym_end = nullptr;
-	for (uint16_t i = 0; i < sh_num; i++, section++) {
-		if (section->type == SectionHeaderType::SHT_STRTAB && dynstr == nullptr) {
-			// we want only .dynstr for .dynsym
-			const char* strtab = (const char*)elf + section->file_offset;
-			const char* last = strtab + section->file_size;
-			const char* s_first = kVmSnapshotDataAsmSymbol;
-			const char* s_last = s_first + strlen(kVmSnapshotDataAsmSymbol) + 1;
-			//if (memmem(strtab, section->s_size, kVmSnapshotDataAsmSymbol, strlen(kVmSnapshotDataAsmSymbol))) {
-			if (std::search(strtab, last, s_first, s_last) != last) {
-				// found it
-				dynstr = strtab;
-			}
-		}
-		if (section->type == SectionHeaderType::SHT_DYNSYM) {
-			if (section->entry_size != sizeof(Symbol))
-				throw std::invalid_argument("ELF: Invalid DYNSYM entry size");
-			dynsym = (Symbol*)(elf + section->file_offset);
-			dynsym_end = (Symbol*)(elf + section->file_offset + section->file_size);
-		}
-		if (dynsym != nullptr && dynstr != nullptr)
-			break;
-	}
-
-	// find the required symbol addresses
 	const uint8_t* vm_snapshot_data = nullptr;
 	const uint8_t* vm_snapshot_instructions = nullptr;
 	const uint8_t* isolate_snapshot_data = nullptr;
 	const uint8_t* isolate_snapshot_instructions = nullptr;
-	for (; dynsym < dynsym_end; dynsym++) {
-		if (dynsym->info == 0)
-			continue;
+	// Add-to-app "library" builds emit a single COMBINED snapshot under non-standard names
+	// (_kDartSnapshotData / _kDartSnapshotText) in .symtab instead of the four standard
+	// _kDartVm.../_kDartIsolate... symbols in .dynsym. Capture those too.
+	const uint8_t* combined_snapshot_data = nullptr;
+	const uint8_t* combined_snapshot_instructions = nullptr;
 
-		const char* name = dynstr + dynsym->name;
-		// Note: sym_size is no needed for dart VM (its blob contains size)
-		if (strcmp(name, kVmSnapshotDataAsmSymbol) == 0) {
-			vm_snapshot_data = elf + dynsym->value;
+	// Scan every symbol table (.dynsym AND .symtab); each one's string table is section[link].
+	for (uint16_t i = 0; i < sh_num; i++) {
+		const auto* section = &sections[i];
+		if (section->type != SectionHeaderType::SHT_DYNSYM && section->type != SectionHeaderType::SHT_SYMTAB)
+			continue;
+		if (section->entry_size != sizeof(Symbol))
+			continue;
+		const char* strtab = (const char*)elf + sections[section->link].file_offset;
+		const Symbol* sym = (const Symbol*)(elf + section->file_offset);
+		const Symbol* sym_end = (const Symbol*)(elf + section->file_offset + section->file_size);
+		for (; sym < sym_end; sym++) {
+			if (sym->info == 0)
+				continue;
+			const char* name = strtab + sym->name;
+			// Use string literals: the dart::elf kXSnapshotDataAsmSymbol constants were
+			// renamed/removed in Dart 3.13.
+			if (strcmp(name, "_kDartVmSnapshotData") == 0)
+				vm_snapshot_data = elf + sym->value;
+			else if (strcmp(name, "_kDartVmSnapshotInstructions") == 0)
+				vm_snapshot_instructions = elf + sym->value;
+			else if (strcmp(name, "_kDartIsolateSnapshotData") == 0)
+				isolate_snapshot_data = elf + sym->value;
+			else if (strcmp(name, "_kDartIsolateSnapshotInstructions") == 0)
+				isolate_snapshot_instructions = elf + sym->value;
+			else if (strcmp(name, "_kDartSnapshotData") == 0)
+				combined_snapshot_data = elf + sym->value;
+			else if (strcmp(name, "_kDartSnapshotText") == 0)
+				combined_snapshot_instructions = elf + sym->value;
 		}
-		else if (strcmp(name, kVmSnapshotInstructionsAsmSymbol) == 0) {
-			vm_snapshot_instructions = elf + dynsym->value;
-		}
-		else if (strcmp(name, kIsolateSnapshotDataAsmSymbol) == 0) {
-			isolate_snapshot_data = elf + dynsym->value;
-		}
-		else if (strcmp(name, kIsolateSnapshotInstructionsAsmSymbol) == 0) {
-			isolate_snapshot_instructions = elf + dynsym->value;
-		}
+	}
+
+	// Combined-snapshot fallback: use the single blob for the isolate slots, and reuse it for the
+	// VM slots (Dart_Initialize accepts an AOT isolate snapshot's shared header for the VM side).
+	if (isolate_snapshot_data == nullptr && combined_snapshot_data != nullptr) {
+		isolate_snapshot_data = combined_snapshot_data;
+		isolate_snapshot_instructions = combined_snapshot_instructions;
+	}
+	if (vm_snapshot_data == nullptr && combined_snapshot_data != nullptr) {
+		vm_snapshot_data = combined_snapshot_data;
+		vm_snapshot_instructions = combined_snapshot_instructions;
 	}
 
 	if (vm_snapshot_data == nullptr)

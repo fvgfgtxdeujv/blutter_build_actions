@@ -61,7 +61,11 @@ public:
 	uint64_t MonomorphicAddress() const { return morphic_addr; }
 	bool HasMorphicCode() const { return morphic_addr != ep_addr; }
 
-	virtual int64_t Size() const { return size > 0 ? size - (ep_addr - payload_addr) : 0; }
+	// Dart 3.13: Code::Size()/PayloadStart() are unreliable under AOT (some Code objects carry a
+	// junk instructions_length_ and report multi-megabyte sizes). When fixupFunctionSizes() has
+	// corrected it, return the fixed size; otherwise fall back to the raw computation.
+	virtual int64_t Size() const { return fixedSize >= 0 ? fixedSize : (size > 0 ? size - (ep_addr - payload_addr) : 0); }
+	void SetFixedSize(int64_t s) { fixedSize = s; }
 	virtual std::string FullName() const;
 
 	DartFunction* GetOutermostFunction() const;
@@ -113,6 +117,8 @@ private:
 	uint64_t payload_addr; // the start of whole function data (most of them are same as entry point)
 	uint64_t morphic_addr; // Monomorphic entry point (used for check class id before normal entry point)
 	//uint32_t code_size; // code size
+	// Dart 3.13: reliable size set by DartApp::fixupFunctionSizes(); -1 means not corrected
+	int64_t fixedSize{ -1 };
 
 	DartFunctionSignature signature;
 	std::unique_ptr<AnalyzedFnData> analyzedData;

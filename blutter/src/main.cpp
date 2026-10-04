@@ -9,6 +9,12 @@
 
 int main(int argc, char** argv)
 {
+	// stdout/stderr are block-buffered when redirected to a pipe/file: if the process is killed
+	// (OOM/timeout) the buffered output is lost, making the log appear to stop mid-line. Disable
+	// buffering so progress is visible in real time.
+	setvbuf(stdout, nullptr, _IONBF, 0);
+	setvbuf(stderr, nullptr, _IONBF, 0);
+
 	args::ArgumentParser parser("B(l)utter - Reversing flutter application", "");
 	args::HelpFlag help(parser, "help", "Display this help menu", { 'h', "help" });
 	args::Group reqGrp(parser, "Required arguments", args::Group::Validators::All);

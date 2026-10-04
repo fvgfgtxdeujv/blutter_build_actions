@@ -6,13 +6,35 @@
 // forward declaration
 class DartAbstractType;
 
+// Dart 3.13 removed OBJECT_STORE_STUB_CODE_LIST: the object-store stubs were merged into
+// VM_STUB_CODE_LIST. In this build only the VM_* enum values exist, so map the legacy (non-VM)
+// names used across the analyzer onto their VM counterparts, keeping the rest of the code shared
+// between Dart < 3.13 and >= 3.13.
+#ifndef OBJECT_STORE_STUB_CODE_LIST
+#  define InitAsyncStub InitAsyncVMStub
+#  define DefaultTypeTestStub DefaultTypeTestVMStub
+#  define DefaultNullableTypeTestStub DefaultNullableTypeTestVMStub
+#  define AllocateMintSharedWithoutFPURegsStub AllocateMintSharedWithoutFPURegsVMStub
+#  define AllocateMintSharedWithFPURegsStub AllocateMintSharedWithFPURegsVMStub
+#  define InitLateStaticFieldStub InitLateStaticFieldVMStub
+#  define InitLateFinalStaticFieldStub InitLateFinalStaticFieldVMStub
+#  define LateInitializationErrorSharedWithoutFPURegsStub LateInitializationErrorSharedWithoutFPURegsVMStub
+#  define LateInitializationErrorSharedWithFPURegsStub LateInitializationErrorSharedWithFPURegsVMStub
+#  define WriteBarrierWrappersStub WriteBarrierWrappersVMStub
+#  define ArrayWriteBarrierStub ArrayWriteBarrierVMStub
+#endif // !OBJECT_STORE_STUB_CODE_LIST
+
 class DartStub : public DartFnBase
 {
 public:
 	enum Kind : int32_t {
+#ifndef OBJECT_STORE_STUB_CODE_LIST
+		// Dart 3.13: object-store stubs were merged into VM_STUB_CODE_LIST below.
+#else
 #define DO(member, name) name ## Stub,
 		OBJECT_STORE_STUB_CODE_LIST(DO)
 #undef DO
+#endif
 		BuildNonGenericMethodExtractorStub,
 		BuildGenericMethodExtractorStub,
 #define DO(name) name ## VMStub,

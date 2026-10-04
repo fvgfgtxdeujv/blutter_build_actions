@@ -3,6 +3,7 @@
 #include "DartClass.h"
 #include <numeric>
 #include <sstream>
+#include <set>
 
 const DartTypeArguments DartTypeArguments::Null;
 
@@ -328,9 +329,16 @@ DartAbstractType* DartTypeDb::FindOrAdd(dart::AbstractTypePtr abTypePtr)
 	}
 	// Reachable when the snapshot holds an AbstractType subclass this build was
 	// not compiled for (e.g. RecordType when HAS_RECORD_TYPE is missing) or a
-	// corrupted slot. Report the real class id so the gap is immediately clear.
-	FATAL("Invalid abstract type: cid=%d (check build defines such as HAS_RECORD_TYPE)",
-		(int)abTypePtr.GetClassId());
+	// corrupted slot. Rather than aborting the whole dump, treat the object as a
+	// plain Type of its own class so the class/field schema is still recovered.
+	// Log each distinct class id once for visibility.
+	{
+		static std::set<intptr_t> seen;
+		const intptr_t cid = abTypePtr.GetClassId();
+		if (seen.insert(cid).second)
+			fprintf(stderr, "[blutter] unhandled abstract-type ClassId=%d -> treating as Type(cid)\n", (int)cid);
+		return Get((uint32_t)cid);
+	}
 }
 
 const DartTypeArguments* DartTypeDb::FindOrAdd(dart::TypeArgumentsPtr typeArgsPtr)

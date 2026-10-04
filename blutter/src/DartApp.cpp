@@ -183,6 +183,11 @@ void DartApp::LoadInfo()
 	// UnknownDartCode stub in the obfuscated app
 	fixUnknownFunctionSizes();
 
+	// Dart 3.13: Code::Size()/PayloadStart() are no longer reliable for some
+	// Code objects; correct the unreasonable sizes using the distance to the
+	// next known code start. Skips size_unknown functions handled above.
+	fixupFunctionSizes();
+
 	// functions whose Code owner is a Smi (obfuscated) are attached to
 	// nativeLib.topClass. Give the library a name and mark it as visible so
 	// CodeAnalyzer/DartDumper process them like any other library.
@@ -450,13 +455,16 @@ void DartApp::loadFromClassTable(dart::IsolateGroup* ig)
 
 void DartApp::loadStubs(dart::ObjectStore* store)
 {
+#ifdef OBJECT_STORE_STUB_CODE_LIST
 	dart::CodePtr ptr;
 	auto& code = dart::Code::Handle();
+#endif
 	uint64_t ep_addr;
 	DartStub* stub;
 
 	// Note: some stub might contain multiple of duplicated stubs
 	// these stubs are called "_iso_stub_" in runtime/vm/stub_code.cc
+#ifdef OBJECT_STORE_STUB_CODE_LIST
 #define DO(member, name) \
 	ptr = store->member(); \
 	code = ptr; \
@@ -473,10 +481,15 @@ void DartApp::loadStubs(dart::ObjectStore* store)
 	
 	code = store->throw_stub();
 	throwStubAddr = code.EntryPoint();
+#else
+	// Dart 3.13: OBJECT_STORE_STUB_CODE_LIST and the method-extractor object-store stubs were
+	// removed (all migrated into the VM_STUB_CODE_LIST loaded below). The throw stub is now
+	// exposed through StubCode.
+	throwStubAddr = dart::StubCode::Throw().EntryPoint();
+#endif
 
 	// load VM stub code
 	// the dart entry point "static void main()" is a LazyCompileVMStub which call "main" stub (a real main)
-	ASSERT(dart::StubCode::HasBeenInitialized());
 #define DO(name) {\
 		const auto& code = dart::StubCode::name(); \
 		ep_addr = code.EntryPoint() - base(); \
@@ -926,6 +939,43 @@ void DartApp::walkObject(dart::Object& obj)
 		}
 	}
 
+}
+
+// Dart 3.13: under AOT, Code::Size() is unreliable — PayloadStart() often collapses to the entry
+// point and instructions_length_ holds a junk value for some Code objects, which makes
+// DartFunction::Size() report multi-megabyte sizes (disassembling that much exhausts memory).
+// Correct an unreasonable size using the distance to the next known code start (function or stub).
+// Functions whose Code object was replaced with UnknownDartCode are skipped here; their size is
+// recovered by scanning in fixUnknownFunctionSizes().
+void DartApp::fixupFunctionSizes()
+{
+	std::vector<uint64_t> starts;
+	starts.reserve(functions.size() + stubs.size());
+	for (const auto& [ep, fn] : functions) starts.push_back(ep);
+	for (const auto& [ep, stub] : stubs) starts.push_back(ep);
+	if (starts.empty()) return;
+	std::sort(starts.begin(), starts.end());
+
+	// conservative upper bound for the last function (no next start available)
+	constexpr int64_t kMaxFallbackSize = 64 * 1024;
+	int fixed = 0;
+	for (auto& [ep, fn] : functions) {
+		if (fn->SizeUnknown())
+			continue;
+		const int64_t cur = fn->Size();
+		const auto it = std::upper_bound(starts.begin(), starts.end(), ep);
+		const int64_t gap = (it == starts.end()) ? -1 : (int64_t)(*it - ep);
+
+		if (cur > 0 && (gap < 0 ? cur <= kMaxFallbackSize : cur <= gap)) {
+			continue;  // existing size is reasonable, leave it alone
+		}
+		fn->SetFixedSize(gap > 0 ? gap : kMaxFallbackSize);
+		++fixed;
+	}
+	if (fixed) {
+		std::cerr << std::format("[blutter] fixupFunctionSizes: corrected {} of {} functions\n",
+			fixed, functions.size());
+	}
 }
 
 void DartApp::loadFromObjectPool()

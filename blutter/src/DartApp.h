@@ -45,6 +45,7 @@ private:
 	void findFunctionInHeap();
 	void finalizeFunctionsInfo();
 	void fixUnknownFunctionSizes();
+	void fixupFunctionSizes();
 	void loadFromObjectPool();
 	void walkObject(dart::Object& obj); // to check field types from existed object
 

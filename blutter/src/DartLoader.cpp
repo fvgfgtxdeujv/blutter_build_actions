@@ -2,6 +2,8 @@
 #include "DartLoader.h"
 #include <stdexcept>
 #include <cstdlib>
+#include <type_traits>
+#include <utility>
 
 // Note: most running dart VM code from runtime/bin/main.cc
 
@@ -18,6 +20,27 @@ static void init_vm_flags()
 		throw std::runtime_error(error);
 }
 
+// Dart 3.13 removed vm_snapshot_data/instructions from Dart_InitializeParams (the VM snapshot is
+// now built into the runtime). This trait lets the assignment below compile conditionally, so the
+// same source works for both Dart < 3.13 and >= 3.13.
+template <typename P, typename = void>
+struct has_vm_snapshot_params : std::false_type {};
+template <typename P>
+struct has_vm_snapshot_params<P, std::void_t<decltype(std::declval<P&>().vm_snapshot_data)>> : std::true_type {};
+
+template <typename P>
+static void set_vm_snapshot_params(P& params, const uint8_t* data, const uint8_t* instr)
+{
+	if constexpr (has_vm_snapshot_params<P>::value) {
+		params.vm_snapshot_data = data;
+		params.vm_snapshot_instructions = instr;
+	}
+	else {
+		(void)data;
+		(void)instr;
+	}
+}
+
 static void init_dart(const uint8_t* vm_snapshot_data, const uint8_t* vm_snapshot_instructions)
 {
 	char* error = NULL;
@@ -25,8 +48,7 @@ static void init_dart(const uint8_t* vm_snapshot_data, const uint8_t* vm_snapsho
 	Dart_InitializeParams init_params;
 	memset(&init_params, 0, sizeof(init_params));
 	init_params.version = DART_INITIALIZE_PARAMS_CURRENT_VERSION;
-	init_params.vm_snapshot_data = vm_snapshot_data;
-	init_params.vm_snapshot_instructions = vm_snapshot_instructions;
+	set_vm_snapshot_params(init_params, vm_snapshot_data, vm_snapshot_instructions);
 	init_params.start_kernel_isolate = false;
 	// other params are no needed if snapshot is not run
 	error = Dart_Initialize(&init_params);

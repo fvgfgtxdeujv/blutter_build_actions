@@ -8,6 +8,15 @@
 
 #ifndef NO_CODE_ANALYSIS
 
+// Dart 3.13 fallback: closures inline captures; the separate context/delayed-type-args fields
+// were removed. Emit -1 so patterns referencing them still compile.
+#ifndef AOT_Closure_context_offset
+#define AOT_Closure_context_offset (-1)
+#endif
+#ifndef AOT_Closure_delayed_type_arguments_offset
+#define AOT_Closure_delayed_type_arguments_offset (-1)
+#endif
+
 // auto revert ASM iterator to the current when pattern does not match or an exception occurs
 class InsnMarker
 {
@@ -175,8 +184,14 @@ static VarValue* getPoolObject(DartApp& app, intptr_t offset, A64::Register dstR
 		return new VarInteger(imm, VarValue::NativeInt);
 	}
 	else if (objType == dart::ObjectPool::EntryType::kNativeFunction) {
-		//val = pool.RawValueAt(idx);
-		throw std::runtime_error("getting native function pool object from Dart code");
+		// Dart 3.13: the object pool may contain kNativeFunction entries (@Native / FFI targets).
+		// Upstream throws std::runtime_error here, but nothing catches it, aborting the whole
+		// analysis (and thus the packaging). Degrade to a placeholder: treat the native function
+		// pointer like an immediate integer value.
+		auto raw = pool.RawValueAt(idx);
+		if (dstReg.IsDecimal())
+			return new VarDouble(*((double*)&raw), VarType::NativeDouble);
+		return new VarInteger(raw, VarValue::NativeInt);
 	}
 	else {
 		throw std::runtime_error(std::format("unknown pool object type: {}", (int)objType).c_str());
@@ -662,7 +677,10 @@ std::unique_ptr<CallLeafRuntimeInstr> FunctionAnalyzer::processCallLeafRuntime(A
 			const auto tmp_reg = insn.ops(0).reg;
 			++insn;
 
-			if (!(insn.id() == ARM64_INS_LDR && insn.ops(1).mem.base == tmp_reg)) {
+			// Dart 3.13: require a same-register load (ldr xTmp, [xTmp, #leafOff]). 3.13 can emit
+			// mov xTmp, THR; ldr xOther, [xTmp, #largeOff] which is a different semantics; matching
+			// only the base register would misroute a non-leaf offset into this branch.
+			if (!(insn.id() == ARM64_INS_LDR && insn.ops(1).mem.base == tmp_reg && insn.ops(0).reg == tmp_reg)) {
 				return nullptr;
 			}
 		}
@@ -672,7 +690,10 @@ std::unique_ptr<CallLeafRuntimeInstr> FunctionAnalyzer::processCallLeafRuntime(A
 		const A64::Register tmp_target_reg = insn.ops(0).reg;
 		++insn;
 
-		INSN_ASSERT(GetThreadLeafFunction(thr_offset));
+		// Dart 3.13: this branch is identified by whether the offset is a leaf entry. On a non-leaf
+		// offset exit gracefully (let another pattern handle it) instead of aborting the function.
+		if (!GetThreadLeafFunction(thr_offset))
+			return nullptr;
 
 		std::vector<std::unique_ptr<MoveRegInstr>> movILs;
 		while (true) {
@@ -686,7 +707,9 @@ std::unique_ptr<CallLeafRuntimeInstr> FunctionAnalyzer::processCallLeafRuntime(A
 					continue;
 				}
 				else {
-					INSN_ASSERT(il);
+					// Dart 3.13: the argument-shuffling sequence may change; exit gracefully
+					// instead of failing the whole function.
+					return nullptr;
 				}
 			}
 			if (il->srcReg == A64::Register::FP) {
@@ -2900,18 +2923,20 @@ std::unique_ptr<BoxInt64Instr> FunctionAnalyzer::processBoxInt64Instr(AsmIterato
 			};
 
 			// since Dart 3.5, some function might omit EnterFrame at early of function but do it before calling (BL) here
+			// Dart 3.13: whether EnterDartFrame is emitted here depends on FlowGraph::NeedsFrame()
+			// (see BoxInt64Instr::EmitNativeCode) and does not always match the function-level
+			// frame-pointer decision — so do not gate this on useFramePointer; always try to consume
+			// the frame if the sequence is present.
 			bool doEnterFrame = false;
-			if (!fnInfo->useFramePointer) {
-				if (insn.id() == ARM64_INS_STP && insn.ops(0).reg == CSREG_DART_FP && insn.ops(1).reg == ARM64_REG_LR && insn.ops(2).mem.base == CSREG_DART_SP) {
-					INSN_ASSERT(insn.writeback());
-					++insn;
+			if (insn.id() == ARM64_INS_STP && insn.ops(0).reg == CSREG_DART_FP && insn.ops(1).reg == ARM64_REG_LR && insn.ops(2).mem.base == CSREG_DART_SP) {
+				INSN_ASSERT(insn.writeback());
+				++insn;
 
-					INSN_ASSERT(insn.id() == ARM64_INS_MOV);
-					INSN_ASSERT(insn.ops(0).reg == CSREG_DART_FP);
-					INSN_ASSERT(insn.ops(1).reg == CSREG_DART_SP);
-					++insn;
-					doEnterFrame = true;
-				}
+				INSN_ASSERT(insn.id() == ARM64_INS_MOV);
+				INSN_ASSERT(insn.ops(0).reg == CSREG_DART_FP);
+				INSN_ASSERT(insn.ops(1).reg == CSREG_DART_SP);
+				++insn;
+				doEnterFrame = true;
 			}
 
 			if (insn.id() == ARM64_INS_BL) {
@@ -3538,16 +3563,20 @@ std::unique_ptr<ILInstr> FunctionAnalyzer::processLoadStore(AsmIterator& insn)
 				// TODO: this index is Smi
 			}
 			else {
-				//FATAL("invalid shift for array operation");
-				INSN_ASSERT(shift.value == idxShiftVal);
+				// Dart 3.13: when the index/element offset does not match the expected array type,
+				// exit gracefully instead of failing the whole function; the marker rolls insn back
+				// and the add is handled by another pattern.
+				return nullptr;
 			}
 			bool isTypedData = dart::UntaggedTypedData::payload_offset() - dart::kHeapObjectTag == arr_data_offset;
-			INSN_ASSERT(isTypedData || arr_data_offset == dart::Array::data_offset() - dart::kHeapObjectTag);
+			if (!isTypedData && arr_data_offset != dart::Array::data_offset() - dart::kHeapObjectTag)
+				return nullptr;
 			const auto op0Reg = A64::Register{ insn.ops(0).reg };
 			++insn;
 			if (arrayOp.isLoad) {
 				// load always uses TMP register
-				INSN_ASSERT(tmpReg == CSREG_DART_TMP);
+				if (tmpReg != CSREG_DART_TMP)
+					return nullptr;
 				return std::make_unique<LoadArrayElementInstr>(insn.Wrap(marker.Take()), op0Reg, arrReg, idx, arrayOp);
 			}
 			else {
