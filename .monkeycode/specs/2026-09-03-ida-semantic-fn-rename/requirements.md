@@ -66,4 +66,4 @@ blutter 解析混淆 Dart AOT 样本时，已将每个函数引用的语义线�
 2. WHEN 语义线索登记表为空，系统 SHALL 输出与改动前一致的 `addNames.py`。
 3. 系统 SHALL 保证 SDK 库（url 含 `:`）全部函数命名与改动前逐字节一致。
 4. 系统 SHALL 保证业务混淆库中未被覆盖函数的命名与改动前一致。
-5. 回归断言 `scripts/regression.sh` 执行通过，PASS 计数不低于改动前。
+5. 回归断言执行通过，PASS 计数不低于改动前。

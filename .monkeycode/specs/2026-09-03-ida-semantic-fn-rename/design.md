@@ -91,7 +91,7 @@ graph TD
 ## Test Strategy
 
 - 本地 arm64/x64 编译通过（既有 ninja 双二进制流程）。
-- `scripts/regression.sh` 全量 PASS 不低于改动前（当前基线 PASS=53）。
+- 全量回归 PASS 不低于改动前（当前基线 PASS=53）。
 - 新增断言（`check_common` 后按样本追加，`assert_ge`/`assert_zero`/`assert_eq` 既有 helper）：
   - `semantic_names.txt` 存在且非空（`assert_ge ... '-> fn_' 1`）。
   - `addNames.py` 含 `::fn_` 命名行，数量与 `semantic_names.txt` 行数一致。
@@ -108,5 +108,4 @@ graph TD
 [^3]: (blutter/src/DartDumper.cpp#L59-L101) - isSemanticString 过滤规则
 [^4]: (blutter/src/DartDumper.cpp#L180-L219) - callClueFromFn 生成 call: 线索
 [^5]: (blutter/src/main.cpp#L53-L55) - DumpCode/DumpStringCrossRef/Dump4Ida 调用顺序
-[^6]: (scripts/regression.sh) - 回归断言脚本与 PASS=53 基线
-[^7]: (.monkeycode/specs/2026-09-03-ida-semantic-fn-rename/requirements.md) - 本功能需求文档
+[^6]: (.monkeycode/specs/2026-09-03-ida-semantic-fn-rename/requirements.md) - 本功能需求文档
