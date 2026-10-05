@@ -78,12 +78,11 @@ Entries discovered by the Agent during task execution should follow this format:
 
 [Project Knowledge Summary]
 - Date: 2026-09-02
-- Context: Discovered by Agent while adding winapp regression and regression.sh
+- Context: Discovered by Agent while adding winapp regression samples
 - Category: Build Methods & Testing Methods
 - Instructions:
   - Flutter Windows 桌面样本（/tmp/opencode/winapp/app.so）解析须用 x64 构建：`BLUTTER_ARCH=x64` + `DARTLIB=dartvm3.3.4_linux_x64` + `NO_FRIDA=1`，编译目录 /tmp/opencode/ci/build/blutter_dartvm3.3.4_linux_x64（clang-16 + `-stdlib=libc++`）；用 arm64 语义构建解析会报 "Snapshot not compatible"
   - x64/NO_FRIDA 构建的成功标志是 `Generating application assemblies`（无 "Generating Frida script"）；arm64/android 构建才打印后者
-  - 两个样本的语义回归一条命令入口：`scripts/regression.sh`（默认先 ninja 两个构建目录；断言基线见 .monkeycode/docs/semantic-clue-collection.md 第 8 节）
   - 解析产物 asm/*.dart 部分文件含二进制字节，grep 必须加 `-a`（--text），否则被当二进制跳过导致统计失真
   - 混淆样本的 `Xxx::call`（如 `_fw::call`、`_dw::call`）是 async/stream 包装的稳定噪声，跨 Android/Windows 样本形态一致仅类名不同；按"静态黑名单不启发式"约束逐条加进 `CALL_BLACKLIST`
 
@@ -113,7 +112,7 @@ Entries discovered by the Agent during task execution should follow this format:
 - Instructions:
   - blutter/src/DartDumper.h/.cpp 语义重命名闭环：DumpCode 把业务库（url 无 ':'）混淆函数（__unknown_function__/剥 _ 核心≤4 且含大写或数字的短名）的线索登记进 fnSemanticClues_（ep → strings/calls）；Dump4Ida 查表用 set_name 覆盖为 fn_{token} 并 set_cmt 记 origin，另写 ida_script/semantic_names.txt 追踪表
   - 命名候选规则（两轮实测校准，改命名先看此）：业务形字符串（isBusinessToken：无空格/小写开头/词形可读/长3-28/非 NAME_BLACKLIST）取引用序最后一个（_hFk 的 8 条 VPN 串→fn_startVpn）；无则 call 方法段兜底（同受 NAME_BLACKLIST+isUsefulIdent 约束）。SDK 库（url 含 ':'）函数名逐字节不变，NO_CODE_ANALYSIS/空表退化为旧输出
-  - 曾犯错误：初版对任意字符串命名产生 fn_HDEFWVNQfh...(随机串)/fn_dart_ui×179/fn_while_dispatching...(句子) 噪声；calls 环最初无黑名单导致 fn_length/fn_Icd 漏网。验证靠 arm64+x64 双样本实测 + regression.sh check_semrename（PASS=61）
+  - 曾犯错误：初版对任意字符串命名产生 fn_HDEFWVNQfh...(随机串)/fn_dart_ui×179/fn_while_dispatching...(句子) 噪声；calls 环最初无黑名单导致 fn_length/fn_Icd 漏网。验证靠 arm64+x64 双样本实测（PASS=61）
   - 规格：.monkeycode/specs/2026-09-03-ida-semantic-fn-rename/（requirements/design/tasklist），产物回归在 /tmp/opencode/{zip_test,winapp}/out_regress/
 
 [User Instruction Summary]
@@ -130,7 +129,7 @@ Entries discovered by the Agent during task execution should follow this format:
   - 本构建环境的 libc++（clang++-16 + -stdlib=libc++ -fexperimental-library + PCH）下，PseudoCode.cpp 中**多参数 std::format（含 2 个及以上参数、尤其字符串）会产出内存垃圾**：输出行被随机栈/堆字节夹杂，表现为 .dart 行内出现 NUL 与 0x7f/0x55 指针，且每次运行字节不同。已把 PseudoCode.cpp 内所有多参 std::format 改为字符串拼接（数值格式化保留单参 std::format 或 std::to_string），此后 arm64/x64 伪代码坏行均为 0。新增格式化代码请沿用拼接写法，勿再用多参 std::format
   - 伪代码表达式会指数级膨胀（寄存器表达式互相嵌套替换）：pXo.dart 一度从 817KB 涨到 50MB、单行最长 739KB，并伴随内存压力下的崩溃。setReg/writeFpSlot/writeSpArg 已对单表达式限长 256 字符，expandText 对展开结果限长 8192 字符；新增表达式折叠时勿绕开 capExpr
   - 校验伪代码是否损坏的可靠特征：以 `    //   `（4空格+//+3空格）开头且**不是** `    //     `（asm 行前缀）的行内出现 NUL/控制字节。注意 asm 视图里池字符串字面量本身含 UTF-8 与 ANSI 转义（如 "\x1b[34m"），属正常，勿误判
-  - 回归门禁：bash scripts/regression.sh all（PASS=66）；零漂移用 python3 /tmp/opencode/strip_pseudo.py <base_asm> <out_regress_asm>（drifted=0）
+  - 回归门禁：arm64+x64 双样本全量跑（PASS=66）；零漂移用 python3 /tmp/opencode/strip_pseudo.py <base_asm> <out_regress_asm>（drifted=0）
   - （用户要求）伪代码（`// pseudo:` 段）默认不输出，asm/*.dart 与经典 dump 逐字节一致；仅在命令行传入 `-p` / `--pseudo` 时才在函数体后追加伪代码段。开关实现：PseudoCode::SetEnabled/IsEnabled（全局默认 false），main.cpp 的 args::Flag pseudo 触发，DartDumper 的伪代码生成点用 PseudoCode::IsEnabled() 守卫
 
 [Project Knowledge Summary]
@@ -141,9 +140,9 @@ Entries discovered by the Agent during task execution should follow this format:
   - 根因与复现：该崩溃不是间歇性的，而是确定性构建配置缺陷——winapp/app.so 的 TypeArguments 里含 Dart RecordType；dartvm3.3.4 抽象类型 cid 为 kTypeCid=48、kFunctionTypeCid=49、kRecordTypeCid=50、kTypeParameterCid=51，缺 `-DHAS_RECORD_TYPE` 时 `case dart::kRecordTypeCid` 被 `#ifdef` 编译掉而落到 FATAL 全量中止。最小复现：用缺宏的二进制解析 /tmp/opencode/winapp/app.so 稳定 SIGABRT（RC=134）；标准构建路径（scripts/build.py 探测 class_id.h 传 -DHAS_RECORD_TYPE=1）一直不受影响
   - 已修：blutter/CMakeLists.txt 在 find_package 后用 dartvm 的 vm/class_id.h 自动探测 HAS_TYPE_REF/HAS_RECORD_TYPE（仅当调用方未传时生效，build.py 传值优先）；DartTypes.cpp 的 FATAL 改为打印真实 cid，便于下次一眼定位
   - 已修：blutter/src/DartDumper.cpp asm 输出路径四处多参 `std::format("{:#x}: {}", addr, str)`（原 981/988/997/999）改为字符串拼接（数值格式化保留单参），与 PseudoCode.cpp 约定一致。此即 ASAN 在 DartDumper.cpp:988 报 stack-buffer-overflow 的根因（libc++ `__output_buffer::__flush` 越界读 16 字节），也是 release 构建 asm/*.dart 偶发坏字节（行内 NUL/指针乱码）的来源
-  - 验证：bash scripts/regression.sh all → PASS=66 FAIL=0；x64/arm64 标准构建 reconfigure 均打印 “Auto-detected Dart type macros”，无回归。ASAN 复跑完整产出 2718 个 asm + frida/ida/objs/pp/strings，`ERROR: AddressSanitizer`=0（仅退出时 LeakSanitizer，工具固有），对照修复前只产出 50 个 asm 即崩。零漂移复核：对 asm/*.dart 归一化所有 `0x` 十六进制、`@` 对象后缀与大十进制数后，仅 4 处差异，且都是修复前基线里的坏字节被清除（修复后变干净），其余逐字节一致
+  - 验证：arm64+x64 双样本全量跑 → PASS=66 FAIL=0；x64/arm64 标准构建 reconfigure 均打印 “Auto-detected Dart type macros”，无回归。ASAN 复跑完整产出 2718 个 asm + frida/ida/objs/pp/strings，`ERROR: AddressSanitizer`=0（仅退出时 LeakSanitizer，工具固有），对照修复前只产出 50 个 asm 即崩。零漂移复核：对 asm/*.dart 归一化所有 `0x` 十六进制、`@` 对象后缀与大十进制数后，仅 4 处差异，且都是修复前基线里的坏字节被清除（修复后变干净），其余逐字节一致
   - 同轮 ObjectToString 增强（backlog A/B）：`dumpInstanceFields` 用 `dartCls.Fields()` 建 offset→字段名映射（跳过 static 与空名，命中输出 `name (off_x): value`）——混淆实例字段名多为空串（如 qea offset 8 的字段 `Name()` 为空），且 VM 内部类（`_Enum` 等）在 `DartClass.cpp:37`（`id <= kLastInternalOnlyCid`）提前 return、字段表未加载，故两样本各仅 4 处命中（均为 SDK `Symbol._name`），属数据缺失而非映射 bug；SIMD typed array（Float32x4/Int32x4/Float64x2 ArrayElement）与未处理内部 cid 原为 FATAL，现分别按 `dart::simd128_value_t` 联合体解码（kSimd128Size=16）、返回 `UnhandledClass(name, cid=N)` 占位。asm 输出走 simpleForm 不经过 `dumpInstanceFields`，回归 PASS=66、asm 零漂移
-  - 同轮 C/D 增强（2026-09-20）：`dumpInstance` 类名统一为 `[lib.url] Class<args>`（保留具体类型实参；`lib.url` 空则不加前缀），`kInstanceCid` 走真实类名（`app.GetClass(cid)`），enum 实例输出 `EnumName.value`——`enumValueName()` 按 `_Enum` 布局扫描实例字段槽取第一个 String 即常量名，不依赖 DartClass 字段名（`_Enum` 未镜像）。**关键坑**：`walkObject`/`dumpInstanceFields` 对 unboxed 字段按 `kCompressedWordSize*2` 前进，在 x64 非压缩构建（kCompressedWordSize=8）会前进 16 字节、跳过其后字段（`_Enum._name` 位于 0x10 被跳过）；`enumValueName` 改用固定 `sizeof(int64_t)`=8 字节前进以兼容 arm64/x64，未改既有两处逻辑。基线库名可能被混淆（如 `ZMp`/`yQo`）。验证：regression PASS=66；用 `scripts/norm_diff.py` 剥离 `Obj![lib] ` 前缀与 `.value` 后缀并归一化地址后，zip(2502 文件)/winapp(2730 文件) drifted=0
+  - 同轮 C/D 增强（2026-09-20）：`dumpInstance` 类名统一为 `[lib.url] Class<args>`（保留具体类型实参；`lib.url` 空则不加前缀），`kInstanceCid` 走真实类名（`app.GetClass(cid)`），enum 实例输出 `EnumName.value`——`enumValueName()` 按 `_Enum` 布局扫描实例字段槽取第一个 String 即常量名，不依赖 DartClass 字段名（`_Enum` 未镜像）。**关键坑**：`walkObject`/`dumpInstanceFields` 对 unboxed 字段按 `kCompressedWordSize*2` 前进，在 x64 非压缩构建（kCompressedWordSize=8）会前进 16 字节、跳过其后字段（`_Enum._name` 位于 0x10 被跳过）；`enumValueName` 改用固定 `sizeof(int64_t)`=8 字节前进以兼容 arm64/x64，未改既有两处逻辑。基线库名可能被混淆（如 `ZMp`/`yQo`）。验证：双样本回归 PASS=66；用 `scripts/norm_diff.py` 剥离 `Obj![lib] ` 前缀与 `.value` 后缀并归一化地址后，zip(2502 文件)/winapp(2730 文件) drifted=0
 
 [Project Knowledge Summary]
 - Date: 2026-09-22
