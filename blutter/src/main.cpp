@@ -22,6 +22,7 @@ int main(int argc, char** argv)
 	args::ValueFlag<std::string> outdir(reqGrp, "outdir", "out path", { 'o', "out"});
 	args::ValueFlag<std::string> blacklist(parser, "blacklist", "semantic blacklist file (default: blutter/src/semantic_blacklist.txt)", { 'b', "blacklist"});
 	args::Flag pseudo(parser, "pseudo", "also emit pseudo-code comment blocks in asm output (off by default)", { 'p', "pseudo" });
+	args::Flag exception(parser, "exception", "also emit exception try/handler markers in asm output (off by default)", { 'e', "exception" });
 
 	try {
 		parser.ParseCLI(argc, argv);
@@ -29,6 +30,8 @@ int main(int argc, char** argv)
 			SetSemanticBlacklistFile(args::get(blacklist));
 		if (pseudo)
 			PseudoCode::SetEnabled(true);
+		if (exception)
+			SetExceptionViewEnabled(true);
 
 		auto& libappPath = args::get(infile);
 

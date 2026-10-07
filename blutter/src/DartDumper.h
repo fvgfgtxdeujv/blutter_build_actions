@@ -10,6 +10,13 @@
 // (see --blacklist in main.cpp and the loader in DartDumper.cpp).
 void SetSemanticBlacklistFile(const std::string& path);
 
+// Exception-view feature gate (-e/--exception).  exceptions.txt is always
+// written, but the in-asm `try<i>`/`handler<i>` markers and the per-function
+// `// exception:` head summary are only emitted when this is enabled, so the
+// default asm/*.dart stays byte-identical (same convention as -p/--pseudo).
+void SetExceptionViewEnabled(bool enabled);
+bool IsExceptionViewEnabled();
+
 // Semantic clues of one function, collected during DumpCode and consumed by
 // Dump4Ida to give obfuscated functions a readable name (see isObfuscatedFnName).
 struct FnSemanticClues {

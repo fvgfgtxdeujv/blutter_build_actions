@@ -11,6 +11,101 @@
 // place static member because no DartFnBase source file
 intptr_t DartFnBase::lib_base;
 
+// Decode the Code exception-handler table (and the PcDescriptors try-index
+// ranges) into a self-contained DartExceptionTable. Exception-handler PC
+// offsets and PcDescriptor PC offsets share the same base (Code.PayloadStart()),
+// so both are converted to library-relative addresses here.
+// This is intentionally side-effect free w.r.t. the dumped output: callers only
+// emit it when the exception view is enabled.
+static void ExtractExceptionTable(DartExceptionTable& out,
+                                  const dart::Code& code,
+                                  int64_t payload_addr)
+{
+	if (code.IsNull())
+		return;
+
+	auto* zone = dart::Thread::Current()->zone();
+
+	const auto& handlers = dart::ExceptionHandlers::Handle(zone, code.exception_handlers());
+	if (handlers.IsNull())
+		return;
+
+	const intptr_t numHandlers = handlers.num_entries();
+	if (numHandlers <= 0)
+		return;
+
+	out.present = true;
+	out.handlers.reserve(numHandlers);
+
+	for (intptr_t i = 0; i < numHandlers; i++) {
+		dart::ExceptionHandlerInfo info;
+		handlers.GetHandlerInfo(i, &info);
+
+		DartExceptionHandler h;
+		h.tryIndex = (int32_t)i;
+		h.outerTryIndex = (int32_t)info.outer_try_index;
+		h.hasCatchAll = info.has_catch_all != 0;
+		h.isGenerated = info.is_generated != 0;
+		h.needsStackTrace = info.needs_stacktrace != 0;
+		h.handlerPc = (uint64_t)(payload_addr + (int64_t)info.handler_pc_offset);
+
+		// handled types of this try block (empty when catch-all / generated)
+		const auto& types = dart::Array::Handle(zone, handlers.GetHandledTypes(i));
+		if (!types.IsNull()) {
+			const intptr_t numTypes = types.Length();
+			h.catches.reserve(numTypes);
+			for (intptr_t k = 0; k < numTypes; k++) {
+				DartExceptionCatch c;
+				try {
+					const auto& obj = dart::Object::Handle(zone, types.At(k));
+					if (obj.IsAbstractType())
+						c.typeName = obj.ToCString();
+				}
+				catch (...) {
+					// never let a malformed handled-type entry abort the dump
+					c.typeName.clear();
+				}
+				if (c.typeName.empty())
+					c.typeName = "?";
+				h.catches.push_back(std::move(c));
+			}
+		}
+		out.handlers.push_back(std::move(h));
+	}
+
+	// Protected PC range per try index, derived from PcDescriptors (AOT data).
+	const auto& pcs = dart::PcDescriptors::Handle(zone, code.pc_descriptors());
+	if (!pcs.IsNull()) {
+		std::unordered_map<intptr_t, DartTryRange> ranges;
+		dart::PcDescriptors::Iterator iter(pcs, dart::UntaggedPcDescriptors::kAnyKind);
+		while (iter.MoveNext()) {
+			const intptr_t tryIndex = iter.TryIndex();
+			if (tryIndex < 0)
+				continue;
+			const int64_t pc = payload_addr + (int64_t)iter.PcOffset();
+			auto it = ranges.find(tryIndex);
+			if (it == ranges.end()) {
+				DartTryRange r;
+				r.tryIndex = (int32_t)tryIndex;
+				r.begin = (uint64_t)pc;
+				r.end = (uint64_t)pc;
+				ranges.emplace(tryIndex, r);
+			}
+			else {
+				if (pc < (int64_t)it->second.begin)
+					it->second.begin = (uint64_t)pc;
+				if (pc > (int64_t)it->second.end)
+					it->second.end = (uint64_t)pc;
+			}
+		}
+		out.tryRanges.reserve(ranges.size());
+		for (auto& kv : ranges)
+			out.tryRanges.push_back(kv.second);
+		std::sort(out.tryRanges.begin(), out.tryRanges.end(),
+			[](const DartTryRange& a, const DartTryRange& b) { return a.tryIndex < b.tryIndex; });
+	}
+}
+
 DartFunction::DartFunction(DartClass& cls, const dart::FunctionPtr ptr) : DartFnBase(), cls(cls), parent(nullptr), ptr(ptr), kind(NORMAL)
 {
 	auto* zone = dart::Thread::Current()->zone();
@@ -114,9 +209,11 @@ DartFunction::DartFunction(DartClass& cls, const dart::FunctionPtr ptr) : DartFn
 		}
 	}
 
-	// TODO:
-	// more info: https://mrale.ph/dartvm/compiler/exceptions.html
-	//auto& catchData = dart::TypedData::Handle(zone, code.catch_entry_moves_maps());
+	// Exception handling metadata. More info on the VM layout:
+	//   https://mrale.ph/dartvm/compiler/exceptions.html
+	// NOTE: code.catch_entry_moves_maps() (frame reshuffling) is still not
+	// decoded; only the handler table + try ranges are exposed for now.
+	ExtractExceptionTable(exceptions, code, (int64_t)payload_addr);
 }
 
 // kind should be raw code
@@ -143,6 +240,8 @@ DartFunction::DartFunction(DartClass& cls, const dart::Code& code)
 		payload_addr = ep_addr;
 		morphic_addr = ep_addr;
 	}
+
+	ExtractExceptionTable(exceptions, code, (int64_t)payload_addr);
 }
 
 void DartFunction::SetScannedSize(int64_t s)

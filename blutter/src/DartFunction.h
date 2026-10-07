@@ -32,6 +32,38 @@ struct DartFunctionSignature
 	bool hasNamedParam;
 };
 
+// ---- Dart AOT exception handling metadata (see
+// .monkeycode/specs/2026-10-06-dart-exception-handler-analysis) ----
+// A catch clause of one handler row (the types caught by that try block).
+struct DartExceptionCatch {
+	std::string typeName; // readable handled-type name, e.g. "Object" / "RangeError"
+};
+
+// One row of the Code exception-handlers table. handlerPc is library-relative,
+// i.e. PayloadAddress() + handler_pc_offset (the same base as PcDescriptors).
+struct DartExceptionHandler {
+	int32_t tryIndex{ -1 };
+	uint64_t handlerPc{ 0 };
+	int32_t outerTryIndex{ -1 };
+	bool hasCatchAll{ false };
+	bool isGenerated{ false };
+	bool needsStackTrace{ false };
+	std::vector<DartExceptionCatch> catches;
+};
+
+// PC range protected by a single try block (library-relative, [begin,end)).
+struct DartTryRange {
+	int32_t tryIndex{ -1 };
+	uint64_t begin{ 0 };
+	uint64_t end{ 0 };
+};
+
+struct DartExceptionTable {
+	bool present{ false };
+	std::vector<DartExceptionHandler> handlers;
+	std::vector<DartTryRange> tryRanges;
+};
+
 class DartFunction : public DartFnBase
 {
 public:
@@ -86,6 +118,9 @@ public:
 	std::vector<FnParam>& Params() { return signature.Params(); }
 	FnParam& Param(int i) { return signature.Param(i); }
 
+	// Exception handling metadata extracted from Code (empty when absent).
+	const DartExceptionTable& Exceptions() const { return exceptions; }
+
 	void SetAnalyzedData(std::unique_ptr<AnalyzedFnData> data);
 	AnalyzedFnData* GetAnalyzedData() { return analyzedData.get(); }
 	const AnalyzedFnData* GetAnalyzedData() const { return analyzedData.get(); }
@@ -122,6 +157,7 @@ private:
 
 	DartFunctionSignature signature;
 	std::unique_ptr<AnalyzedFnData> analyzedData;
+	DartExceptionTable exceptions;
 
 	friend class DartApp;
 };

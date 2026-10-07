@@ -86,6 +86,18 @@ void SetSemanticBlacklistFile(const std::string& path)
 	g_blacklistFile = path;
 }
 
+static bool g_exceptionViewEnabled = false;
+
+void SetExceptionViewEnabled(bool enabled)
+{
+	g_exceptionViewEnabled = enabled;
+}
+
+bool IsExceptionViewEnabled()
+{
+	return g_exceptionViewEnabled;
+}
+
 static SemanticBlacklists loadSemanticBlacklists()
 {
 	SemanticBlacklists bl;
@@ -810,6 +822,49 @@ void DartDumper::DumpCode(const char* out_dir)
 
 	Disassembler disasmer;
 
+	// Exception handling report. This file is always written and is completely
+	// independent from asm/*.dart, so the classic dump is unaffected.
+	std::ofstream excOf((std::filesystem::path(out_dir) / "exceptions.txt").string());
+
+	// Innermost try index covering addr (ranges are sorted by ascending index,
+	// so the largest matching index is the innermost block). -1 if uncovered.
+	const auto tryIndexOf = [](const DartExceptionTable& tbl, uint64_t addr) -> int32_t {
+		int32_t found = -1;
+		for (const auto& r : tbl.tryRanges) {
+			if (addr >= r.begin && addr <= r.end)
+				found = r.tryIndex;
+		}
+		return found;
+	};
+	const auto handlerIndexOf = [](const DartExceptionTable& tbl, uint64_t addr) -> int32_t {
+		for (const auto& h : tbl.handlers) {
+			if (h.handlerPc == addr)
+				return h.tryIndex;
+		}
+		return -1;
+	};
+	const auto writeExceptionSection = [&excOf](DartFunction* dartFn) {
+		const auto& tbl = dartFn->Exceptions();
+		if (!tbl.present)
+			return;
+		excOf << dartFn->FullName() << " @" << std::format("{:#x}", dartFn->Address()) << "\n";
+		for (const auto& h : tbl.handlers) {
+			excOf << std::format(
+				"  try{} handler={:#x} outer={} catch_all={} generated={} stack={}\n",
+				h.tryIndex, h.handlerPc, h.outerTryIndex,
+				(int)h.hasCatchAll, (int)h.isGenerated, (int)h.needsStackTrace);
+			for (size_t i = 0; i < h.catches.size(); i++)
+				excOf << std::format("    {}. {}\n", i, h.catches[i].typeName);
+		}
+		if (!tbl.tryRanges.empty()) {
+			excOf << "  ranges:";
+			for (const auto& r : tbl.tryRanges)
+				excOf << std::format("  try{} [{:#x},{:#x})", r.tryIndex, r.begin, r.end);
+			excOf << "\n";
+		}
+		excOf << "\n";
+	};
+
 	// nativeLib collects functions whose Code object owner is a Smi
 	// (obfuscated apps). It is not part of app.libs, so process it explicitly.
 	// Note: only its topClass holds these functions; other classes in
@@ -843,6 +898,37 @@ void DartDumper::DumpCode(const char* out_dir)
 				of << "\n";
 			for (auto dartFn : dartCls->Functions()) {
 				dartFn->PrintHead(of);
+
+				// Always report the exception table (independent of asm output).
+				writeExceptionSection(dartFn);
+
+				// Opt-in per-function summary; gate keeps default asm identical.
+				if (IsExceptionViewEnabled()) {
+					const auto& tbl = dartFn->Exceptions();
+					if (tbl.present) {
+						of << "    // exception: ";
+						bool first = true;
+						for (const auto& h : tbl.handlers) {
+							if (!first)
+								of << ", ";
+							first = false;
+							of << std::format("try{}->{:#x}", h.tryIndex, h.handlerPc);
+							if (h.hasCatchAll) {
+								of << "(all)";
+							}
+							else if (!h.catches.empty()) {
+								of << "(";
+								for (size_t i = 0; i < h.catches.size(); i++) {
+									if (i)
+										of << "|";
+									of << h.catches[i].typeName;
+								}
+								of << ")";
+							}
+						}
+						of << "\n";
+					}
+				}
 
 #ifndef NO_CODE_ANALYSIS
 				// use as app is loaded at zero
@@ -969,6 +1055,30 @@ void DartDumper::DumpCode(const char* out_dir)
 							}
 							break;
 						}
+						}
+
+						// Opt-in try<i>/handler<i> markers appended to the
+						// existing per-instruction annotation.
+						if (IsExceptionViewEnabled()) {
+							const auto& tbl = dartFn->Exceptions();
+							if (tbl.present) {
+								std::string marks;
+								const int32_t hIdx = handlerIndexOf(tbl, asmText.addr);
+								if (hIdx >= 0)
+									marks = std::format("handler{}", hIdx);
+								const int32_t tIdx = tryIndexOf(tbl, asmText.addr);
+								if (tIdx >= 0) {
+									if (!marks.empty())
+										marks += " ";
+									marks += std::format("try{}", tIdx);
+								}
+								if (!marks.empty()) {
+									if (extra.empty())
+										extra = marks;
+									else
+										extra += " " + marks;
+								}
+							}
 						}
 
 						of << "    // ";
