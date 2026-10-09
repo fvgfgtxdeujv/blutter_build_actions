@@ -12,7 +12,9 @@ class DartFunction;
 //   * register data-flow is folded into expressions (mov reg/reg, [fp] slots, [SP] args)
 //   * field/array loads and stores become `obj->field_x = v;`-style statements
 //   * call sites take their stack arguments and fold `return f(...)` when direct
-//   * conditional/unconditional jumps become `// if (...) goto 0x...` annotations
+//   * the CFG is reconstructed from the same asm text so nested `if/else`,
+//     `while`, `do/while` and `switch` lines are emitted; unstructured regions
+//     fall back to `// if (...) goto 0x...` / `// goto 0x...` annotations
 // Nothing here claims decompiler-grade control flow: it is a "semantic stream"
 // view with raw instructions kept as fallback lines, so information is never lost.
 //

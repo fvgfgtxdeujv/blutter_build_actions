@@ -133,6 +133,10 @@ public:
 		return "CheckStackOverflow";
 	}
 
+	// Target of the overflow slow-path branch.  Exposed so the control-flow
+	// layer can prefer the IL-known target over the (re-parsed) asm operand.
+	uint64_t OverflowBranch() const { return overflowBranch; }
+
 protected:
 	uint64_t overflowBranch;
 };

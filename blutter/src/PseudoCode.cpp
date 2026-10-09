@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "PseudoCode.h"
 #include "CodeAnalyzer.h"
+#include "ControlFlow.h"
 #include "DartApp.h"
 #include "DartFunction.h"
 #include "il.h"
@@ -220,7 +221,14 @@ public:
 		params = &params_;
 		numFixed = (int)numFixed_;
 
+		// Structured control flow: opt-in (this whole view only runs under -p).
+		// Build the CFG from the same asm text; when it yields a brace-balanced
+		// structural classification we interleave if/else/loop/switch lines,
+		// otherwise every branch keeps its legacy `// if (...) goto` line.
+		buildStructuring(asmTexts, il_insns);
+
 		for (auto& asmText : asmTexts) {
+			emitBlockBegin(asmText.addr);
 			// flush IL entries that start before or at this asm address
 			while (il_itr != il_end && (*il_itr)->Start() <= asmText.addr) {
 				processIL(il_itr->get());
@@ -269,7 +277,153 @@ private:
 	bool swallowNextCond_{ false };         // next jcc belongs to the overflow slow path
 	vector<pair<uint64_t, uint64_t>> ilRanges_; // [start,end) lifted by the IL layer
 
+	// ---- structured control flow (see ControlFlow.h) ----------------------
+	ControlFlow::Cfg cfg_;
+	vector<ControlFlow::StructRole> roles_;
+	unordered_map<uint64_t, size_t> roleByBegin_; // block begin addr -> role index
+	unordered_map<uint64_t, size_t> roleByTerm_;  // terminator addr -> role index
+	bool structured_{ false };
+	uint64_t curAddr_{ 0 };
+
 	void line(const string& s) { lines_.push_back(s); }
+
+	// Build the CFG + classify blocks.  Only keeps the classification when the
+	// structural braces balance out, so the emitted stream can never end up with
+	// stray `{`/`}`; otherwise every branch keeps its legacy goto line.
+	void buildStructuring(const vector<AsmText>& asmTexts,
+		const vector<std::unique_ptr<ILInstr>>& il_insns)
+	{
+		structured_ = false;
+		cfg_ = ControlFlow::Cfg{};
+		roles_.clear();
+		roleByBegin_.clear();
+		roleByTerm_.clear();
+		if (asmTexts.empty())
+			return;
+
+		ControlFlow::BuildOptions opts;
+		opts.isX64 = isX64_;
+		for (auto& p : il_insns) {
+			uint64_t target = 0;
+			if (p->Kind() == ILInstr::BranchIfSmi) {
+				auto* b = static_cast<BranchIfSmiInstr*>(p.get());
+				if (b->branchAddr > 0)
+					target = (uint64_t)b->branchAddr;
+			}
+			else if (p->Kind() == ILInstr::CheckStackOverflow) {
+				target = static_cast<CheckStackOverflowInstr*>(p.get())->OverflowBranch();
+			}
+			else {
+				continue;
+			}
+			if (target == 0)
+				continue;
+			for (uint64_t a = p->Start(); a < p->End(); a++)
+				opts.ilBranchTargets[a] = target;
+		}
+
+		cfg_ = ControlFlow::Build(asmTexts, opts);
+		if (cfg_.blocks.empty())
+			return;
+		roles_ = ControlFlow::Structure(cfg_);
+		if (roles_.size() != cfg_.blocks.size())
+			return;
+
+		int open = 0, close = 0;
+		for (const auto& r : roles_) {
+			if (r.beginKind == ControlFlow::BeginKind::DoOpen ||
+				r.beginKind == ControlFlow::BeginKind::SwitchOpen)
+				open++;
+			if (r.termKind == ControlFlow::TermKind::IfOpen ||
+				r.termKind == ControlFlow::TermKind::WhileOpen)
+				open++;
+			close += r.beginClose;
+			if (r.termKind == ControlFlow::TermKind::TermClose ||
+				r.termKind == ControlFlow::TermKind::DoWhileClose)
+				close++;
+		}
+		if (open != close || open == 0) {
+			roles_.clear();
+			return;
+		}
+
+		for (size_t i = 0; i < cfg_.blocks.size(); i++) {
+			roleByBegin_[cfg_.blocks[i].begin] = i;
+			roleByTerm_[cfg_.blocks[i].last] = i;
+		}
+		structured_ = true;
+	}
+
+	// Emit closers then the block's opener when the asm stream reaches a role
+	// block boundary.
+	void emitBlockBegin(uint64_t addr)
+	{
+		if (!structured_)
+			return;
+		auto it = roleByBegin_.find(addr);
+		if (it == roleByBegin_.end())
+			return;
+		const auto& r = roles_[it->second];
+		for (int i = 0; i < r.beginClose; i++)
+			line("}");
+		switch (r.beginKind) {
+		case ControlFlow::BeginKind::DoOpen:
+			line("do {");
+			break;
+		case ControlFlow::BeginKind::SwitchOpen:
+			line("switch (" + r.switchExpr + ") {");
+			break;
+		case ControlFlow::BeginKind::CaseLabel:
+			line("case " + r.caseValue + ":");
+			break;
+		case ControlFlow::BeginKind::DefaultLabel:
+			line("default:");
+			break;
+		default:
+			break;
+		}
+	}
+
+	enum class TermAction { NotStructured, Emitted, Suppressed };
+
+	// Replace the branch's goto annotation with a structured keyword when the
+	// terminator carries a structural role.  `cond` is the folded condition.
+	TermAction structuredTerm(uint64_t addr, const string& cond)
+	{
+		if (!structured_)
+			return TermAction::NotStructured;
+		auto it = roleByTerm_.find(addr);
+		if (it == roleByTerm_.end())
+			return TermAction::NotStructured;
+		const auto& r = roles_[it->second];
+		if (r.termKind == ControlFlow::TermKind::None)
+			return r.suppressTermGoto ? TermAction::Suppressed : TermAction::NotStructured;
+		string c = cond;
+		if (r.negateCond && !c.empty())
+			c = "!(" + c + ")";
+		if (c.empty())
+			c = "?";
+		switch (r.termKind) {
+		case ControlFlow::TermKind::IfOpen:
+			line("if (" + c + ") {");
+			break;
+		case ControlFlow::TermKind::WhileOpen:
+			line("while (" + c + ") {");
+			break;
+		case ControlFlow::TermKind::IfElseOpen:
+			line("} else {");
+			break;
+		case ControlFlow::TermKind::DoWhileClose:
+			line("} while (" + c + ");");
+			break;
+		case ControlFlow::TermKind::TermClose:
+			line("}");
+			break;
+		default:
+			return TermAction::NotStructured;
+		}
+		return TermAction::Emitted;
+	}
 
 	bool isInternalBase(const string& baseExpr) const
 	{
@@ -654,6 +808,7 @@ private:
 	// ---------------------------------------------------------------------
 	void processAsm(const AsmText& at)
 	{
+		curAddr_ = at.addr;
 		// split mnemonic (text[0..16)) from operands (text[16..))
 		string full(at.text);
 		// trim trailing NUL / spaces of the whole 71-byte field is already NUL-terminated
@@ -688,20 +843,29 @@ private:
 			return;
 		}
 		if (mnem == "jmp") {
-			line(std::format("// goto {}", ops));
+			if (structuredTerm(at.addr, "") == TermAction::NotStructured)
+				line(std::format("// goto {}", ops));
 			inPrologue_ = false;
 			return;
 		}
 		if (isCondJmp(mnem)) {
+			string condExpr;
+			if (!pendingCond_.empty())
+				condExpr = buildCondExpr(mnem);
+			if (structuredTerm(at.addr, condExpr) != TermAction::NotStructured) {
+				swallowNextCond_ = false;
+				pendingCond_.clear();
+				inPrologue_ = false;
+				return;
+			}
 			if (swallowNextCond_) {
 				// overflow-check branch: runtime slow path, no value to a reader
 				swallowNextCond_ = false;
 				return;
 			}
 			string cond;
-			if (!pendingCond_.empty()) {
-				cond = " if (" + buildCondExpr(mnem) + ")";
-			}
+			if (!condExpr.empty())
+				cond = " if (" + condExpr + ")";
 			line("//" + cond + " goto " + ops);
 			pendingCond_.clear();
 			inPrologue_ = false;
@@ -1103,14 +1267,23 @@ private:
 			line("// b." + cond + " " + ops);
 			return;
 		}
+		string condExpr;
+		if (!pendingCond_.empty())
+			condExpr = buildCondExpr(x64cond);
+		if (structuredTerm(curAddr_, condExpr) != TermAction::NotStructured) {
+			swallowNextCond_ = false;
+			pendingCond_.clear();
+			inPrologue_ = false;
+			return;
+		}
 		if (swallowNextCond_) {
 			// overflow-check slow path branch: not interesting to a reader
 			swallowNextCond_ = false;
 			return;
 		}
 		string cexpr;
-		if (!pendingCond_.empty())
-			cexpr = " if (" + buildCondExpr(x64cond) + ")";
+		if (!condExpr.empty())
+			cexpr = " if (" + condExpr + ")";
 		line("//" + cexpr + " goto " + ops);
 		pendingCond_.clear();
 		inPrologue_ = false;
@@ -1208,7 +1381,9 @@ private:
 			if (parts.size() >= 2) {
 				string reg = expandToken(trimStr(parts[0]));
 				string op = (mnem == "cbz") ? "==" : "!=";
-				line("// if (" + reg + " " + op + " 0) goto " + trimStr(parts[1]));
+				string c = reg + " " + op + " 0";
+				if (structuredTerm(curAddr_, c) == TermAction::NotStructured)
+					line("// if (" + c + ") goto " + trimStr(parts[1]));
 				inPrologue_ = false;
 			}
 			return;
@@ -1218,15 +1393,17 @@ private:
 			if (parts.size() >= 3) {
 				string reg = expandToken(trimStr(parts[0]));
 				string op = (mnem == "tbz") ? "==" : "!=";
-				line("// if ((" + reg + " & (1 << " + trimStr(parts[1]) + ")) " + op +
-					" 0) goto " + trimStr(parts[2]));
+				string c = "(" + reg + " & (1 << " + trimStr(parts[1]) + ")) " + op + " 0";
+				if (structuredTerm(curAddr_, c) == TermAction::NotStructured)
+					line("// if (" + c + ") goto " + trimStr(parts[2]));
 				inPrologue_ = false;
 			}
 			return;
 		}
 		// --- unconditional / register branches ---
 		if (mnem == "b" || mnem == "br") {
-			line(std::format("// goto {}", ops));
+			if (structuredTerm(curAddr_, "") == TermAction::NotStructured)
+				line(std::format("// goto {}", ops));
 			inPrologue_ = false;
 			return;
 		}

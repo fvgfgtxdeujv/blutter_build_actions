@@ -2,6 +2,8 @@ set(SRCS
     CodeAnalyzer.cpp
     CodeAnalyzer.h
     CodeAnalyzer_arm64.cpp
+    ControlFlow.cpp
+    ControlFlow.h
     DartApp.cpp
     DartApp.h
     DartClass.cpp
