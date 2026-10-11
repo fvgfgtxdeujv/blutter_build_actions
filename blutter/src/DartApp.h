@@ -17,6 +17,11 @@ public:
 
 	void LoadInfo();
 
+	// After CodeAnalyzer::AnalyzeAll(), fill in return/parameter types that the
+	// snapshot dropped, using the IL analysis result. Existing signatures are
+	// never overwritten. No-op when code analysis is disabled or absent.
+	void BackfillSignaturesFromAnalysis();
+
 	intptr_t base() const { return (intptr_t)lib_base; }
 	uint32_t offset(intptr_t addr) const { return (uint32_t)(addr - base()); }
 	uintptr_t heap_base() const { return heap_base_; }

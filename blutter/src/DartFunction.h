@@ -25,11 +25,17 @@ struct DartFunctionSignature
 	std::vector<FnParam>& Params() { return params; }
 	FnParam& Param(int i) { return params[i]; }
 
-	DartAbstractType* returnType;
+	// Function-level type parameter names (the `<T, U>` of the function
+	// declaration). Empty when the signature was dropped or has none.
+	std::vector<std::string>& TypeParameterNames() { return typeParameterNames; }
+	const std::vector<std::string>& TypeParameterNames() const { return typeParameterNames; }
+
+	DartAbstractType* returnType{ nullptr };
 	//typeParams;
 	std::vector<FnParam> params;
-	int numOptionalParam;
-	bool hasNamedParam;
+	std::vector<std::string> typeParameterNames;
+	int numOptionalParam{ 0 };
+	bool hasNamedParam{ false };
 };
 
 // ---- Dart AOT exception handling metadata (see
@@ -99,6 +105,11 @@ public:
 	virtual int64_t Size() const { return fixedSize >= 0 ? fixedSize : (size > 0 ? size - (ep_addr - payload_addr) : 0); }
 	void SetFixedSize(int64_t s) { fixedSize = s; }
 	virtual std::string FullName() const;
+
+	// Class id of the recovered return type (dart::kIllegalCid when unknown).
+	// Enables call-site `-> Class` annotations (see --types) and return-type
+	// aware dumps.
+	uint32_t ReturnType() const override;
 
 	DartFunction* GetOutermostFunction() const;
 

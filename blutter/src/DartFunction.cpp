@@ -261,6 +261,17 @@ std::string DartFunction::FullName() const
 	return "[" + lib.url + "] " + cls.Name() + "::" + name;
 }
 
+uint32_t DartFunction::ReturnType() const
+{
+	// Recover the return class id from the parsed FunctionType signature (when
+	// present). Only a concrete class Type yields a meaningful class id;
+	// type parameters / function types / records fall back to "unknown".
+	DartAbstractType* rt = signature.returnType;
+	if (rt != nullptr && rt->IsType())
+		return rt->AsType()->Class().Id();
+	return dart::kIllegalCid;
+}
+
 DartFunction* DartFunction::GetOutermostFunction() const
 {
 	// Only closure should call this method

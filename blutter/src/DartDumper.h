@@ -17,6 +17,13 @@ void SetSemanticBlacklistFile(const std::string& path);
 void SetExceptionViewEnabled(bool enabled);
 bool IsExceptionViewEnabled();
 
+// Type/symbol-view feature gate (-t/--types).  Recovered function return types
+// are only appended to call-site annotations when this is enabled; stub-derived
+// annotations are always kept, so the default asm/*.dart stays byte-identical
+// (same convention as -p/--pseudo and -e/--exception).
+void SetTypeSymbolViewEnabled(bool enabled);
+bool IsTypeSymbolViewEnabled();
+
 // Semantic clues of one function, collected during DumpCode and consumed by
 // Dump4Ida to give obfuscated functions a readable name (see isObfuscatedFnName).
 struct FnSemanticClues {

@@ -55,6 +55,15 @@ public:
 	std::vector<DartField*>& Fields() { return fields; }
 	std::vector<DartFunction*>& Functions() { return functions; };
 
+	// True once the field table has been read (even if it was empty). A native
+	// VM class has no field table at all and leaves this false.
+	bool FieldsLoaded() const { return fieldsLoaded; }
+	// True for VM-internal-only classes (id <= kLastInternalOnlyCid) that we now
+	// still mirror fields for (e.g. _Enum), without loading parent/interfaces.
+	bool IsInternalOnly() const { return isInternalOnly; }
+	std::vector<DartClass*>& Mixins() { return mixins; }
+	const std::vector<DartClass*>& Mixins() const { return mixins; }
+
 	void PrintHead(std::ostream& of);
 	void PrintFoot(std::ostream& of);
 
@@ -80,11 +89,16 @@ private:
 	//DartTypeParametersItem* type_params;
 	std::vector<DartClass*> interfaces;
 	DartClass* mixin;
+	// Ordered mixin list reconstructed from the transformed-mixin parent chain
+	// (`_<child>&<extends>&<mixin1>&<mixin2>...`), in source `with` order.
+	std::vector<DartClass*> mixins;
 	//uint32_t parent_size; // offset to start of this class fields
 	int32_t type_argument_offset;
 	int32_t size;
 	bool is_const_constructor;
 	bool is_transformed_mixin;
+	bool fieldsLoaded{ false };
+	bool isInternalOnly{ false };
 	std::vector<DartField*> fields;
 	std::vector<DartFunction*> functions;
 

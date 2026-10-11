@@ -34,13 +34,19 @@ DartClass::DartClass(const DartLibrary& lib_, const dart::Class& cls) :
 		//fields.push_back(dartField);
 	}
 
-	if (!cls.is_loaded() || id <= dart::kLastInternalOnlyCid) {
+	if (!cls.is_loaded()) {
 		// can assume the class is native type (also no parent class)
 		// there is no info (except class name) for native type.
 		return;
 	}
 
-	if (!dart::ClassTable::IsTopLevelCid(id)) {
+	// VM-internal-only classes (id <= kLastInternalOnlyCid, e.g. _Enum, _Type)
+	// still carry a field table worth mirroring, but no user-visible
+	// parent/interface relationship. Mirror their fields below, but skip the
+	// class-hierarchy work.
+	isInternalOnly = id <= dart::kLastInternalOnlyCid;
+
+	if (!isInternalOnly && !dart::ClassTable::IsTopLevelCid(id)) {
 		//auto& supCls = dart::Class::Handle(zone, cls.SuperClass());
 		auto supClsPtr = cls.SuperClass();
 
@@ -83,17 +89,22 @@ DartClass::DartClass(const DartLibrary& lib_, const dart::Class& cls) :
 	}
 	// interfaces reference to other types. wait until all classes are loaded
 
-	// where is nested class?
+	// where is nested class? (loaded for internal-only classes too, so _Enum
+	// instances can be labelled with field names)
 	{
-		const auto& fields = dart::Array::Handle(zone, cls.fields());
-		intptr_t num = fields.Length();
-		for (intptr_t i = 0; i < num; i++) {
-			auto fieldPtr = fields.At(i);
-			AddField(fieldPtr);
+		const auto fieldsPtr = cls.fields();
+		if (fieldsPtr.IsHeapObject()) {
+			const auto& fields = dart::Array::Handle(zone, fieldsPtr);
+			intptr_t num = fields.Length();
+			for (intptr_t i = 0; i < num; i++) {
+				auto fieldPtr = fields.At(i);
+				AddField(fieldPtr);
+			}
+			fieldsLoaded = true;
 		}
 	}
 
-	{
+	if (!isInternalOnly) {
 		const auto& funcs = dart::Array::Handle(zone, cls.functions());
 		intptr_t num_funcs = funcs.Length();
 		for (intptr_t i = 0; i < num_funcs; i++) {
@@ -254,7 +265,7 @@ void DartClass::PrintHead(std::ostream& of)
 	of << " extends " << superCls->name << parentTypeVectorName;;
 
 	// if there is a mixin, the last one is mixin
-	if (!interfaces.empty() || mixin) {
+	if (!interfaces.empty() || mixin || !mixins.empty()) {
 		of << "\n    ";
 		if (!interfaces.empty()) {
 			of << "implements ";
@@ -264,7 +275,17 @@ void DartClass::PrintHead(std::ostream& of)
 				}
 			);
 		}
-		if (mixin) {
+		if (!mixins.empty()) {
+			of << " with ";
+			bool first = true;
+			for (auto* m : mixins) {
+				if (!first)
+					of << ", ";
+				first = false;
+				of << m->FullName();
+			}
+		}
+		else if (mixin) {
 			of << " with " << mixin->FullName();
 		}
 	}

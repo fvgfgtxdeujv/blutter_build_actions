@@ -98,6 +98,18 @@ bool IsExceptionViewEnabled()
 	return g_exceptionViewEnabled;
 }
 
+static bool g_typeSymbolViewEnabled = false;
+
+void SetTypeSymbolViewEnabled(bool enabled)
+{
+	g_typeSymbolViewEnabled = enabled;
+}
+
+bool IsTypeSymbolViewEnabled()
+{
+	return g_typeSymbolViewEnabled;
+}
+
 static SemanticBlacklists loadSemanticBlacklists()
 {
 	SemanticBlacklists bl;
@@ -1047,8 +1059,13 @@ void DartDumper::DumpCode(const char* out_dir)
 							auto* fn = app.GetFunction(asmText.callAddress);
 							if (fn) {
 								extra = fn->FullName();
+								// Stub return types are part of the baseline; recovered
+								// function return types are opt-in (--types) so the
+								// default asm/*.dart output is unchanged.
 								auto retCid = fn->ReturnType();
-								if (retCid != dart::kIllegalCid) {
+								if (retCid != dart::kIllegalCid &&
+									retCid < app.classes.size() &&
+									(fn->IsStub() || IsTypeSymbolViewEnabled())) {
 									auto retCls = app.classes.at(retCid);
 									extra += std::format(" -> {} (size={:#x})", retCls->FullName(), retCls->Size());
 								}

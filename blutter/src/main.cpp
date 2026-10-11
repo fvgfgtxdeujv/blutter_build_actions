@@ -23,6 +23,7 @@ int main(int argc, char** argv)
 	args::ValueFlag<std::string> blacklist(parser, "blacklist", "semantic blacklist file (default: blutter/src/semantic_blacklist.txt)", { 'b', "blacklist"});
 	args::Flag pseudo(parser, "pseudo", "also emit pseudo-code comment blocks in asm output (off by default)", { 'p', "pseudo" });
 	args::Flag exception(parser, "exception", "also emit exception try/handler markers in asm output (off by default)", { 'e', "exception" });
+	args::Flag types(parser, "types", "also emit recovered return-type annotations at call sites (off by default)", { 't', "types" });
 
 	try {
 		parser.ParseCLI(argc, argv);
@@ -32,6 +33,8 @@ int main(int argc, char** argv)
 			PseudoCode::SetEnabled(true);
 		if (exception)
 			SetExceptionViewEnabled(true);
+		if (types)
+			SetTypeSymbolViewEnabled(true);
 
 		auto& libappPath = args::get(infile);
 
@@ -55,6 +58,9 @@ int main(int argc, char** argv)
 		std::cout << "Analyzing the application\n";
 		CodeAnalyzer analyzer{ app };
 		analyzer.AnalyzeAll();
+		// Fill return/parameter types dropped from the snapshot using the IL
+		// analysis result (opt-in output stays behind -t/--types).
+		app.BackfillSignaturesFromAnalysis();
 #endif
 
 		DartDumper dumper{ app };

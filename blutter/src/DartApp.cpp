@@ -429,16 +429,32 @@ void DartApp::loadFromClassTable(dart::IsolateGroup* ig)
 		auto dartType = typeDb->FindOrAdd(cls.DeclarationType());
 		dartCls->declarationType = dartType;
 		ASSERT(dartType->AsType()->Class().Id() == dartCls->Id());
-		// Note: below subvector type might be wrong for complicated generic type
-		if (dartCls->num_type_parameters > 0) {
-			dartCls->typeVectorName = dartType->Arguments().SubvectorName(0, dartCls->num_type_parameters);
+		// The type-argument vector is the full child-first / parent-last
+		// concatenation. This class's own type params are the leading segment;
+		// the parent's are the trailing segment, so the parent sub-vector must
+		// be tail-aligned (picking the first segment is wrong for a generic
+		// parent).
+		const int fullLen = (int)dartType->Arguments().Length();
+		if (dartCls->num_type_parameters > 0 && fullLen > 0) {
+			int len = (int)dartCls->num_type_parameters;
+			if (len > fullLen)
+				len = fullLen;
+			dartCls->typeVectorName = dartType->Arguments().SubvectorName(0, len);
 		}
-		if (dartCls->superCls->num_type_parameters > 0) {
-			dartCls->parentTypeVectorName = dartType->Arguments().SubvectorName(0, dartCls->superCls->num_type_parameters);
+		if (dartCls->superCls->num_type_parameters > 0 && fullLen > 0) {
+			int len = (int)dartCls->superCls->num_type_parameters;
+			int from = fullLen - len;
+			if (from < 0) {
+				len += from;
+				from = 0;
+			}
+			if (len > 0)
+				dartCls->parentTypeVectorName = dartType->Arguments().SubvectorName(from, len);
 		}
 
-		// if there is a mixin, the last one is mixin
-		// TODO: correct multiple interfaces or mixins because compiler generate dummy classes for "extends" and "with" 1 class
+		// A transformed-mixin class carries its own mixin as the last interface;
+		// the remaining interfaces are recorded as implemented interfaces. The
+		// full ordered mixin list is rebuilt in the post-pass below.
 		interfaces = cls.interfaces();
 		auto interfaces_len = interfaces.Length();
 		if (dartCls->is_transformed_mixin) {
@@ -450,6 +466,22 @@ void DartApp::loadFromClassTable(dart::IsolateGroup* ig)
 			type ^= interfaces.At(i);
 			dartCls->interfaces.push_back(classes[type.type_class_id()]);
 		}
+	}
+
+	// Reconstruct the ordered mixin list for transformed-mixin classes. Each
+	// synthetic class in the `_<child>&<extends>&<mixin...>` chain contributes
+	// exactly one mixin; the outermost class carries the last `with` term. Walk
+	// the chain and reverse so the result matches source `with` order.
+	for (auto dartCls : classes) {
+		if (dartCls == nullptr || !dartCls->is_transformed_mixin)
+			continue;
+		std::vector<DartClass*> chain;
+		int guard = 0;
+		for (DartClass* c = dartCls; c != nullptr && c->is_transformed_mixin && guard++ < 64; c = c->superCls) {
+			if (c->mixin != nullptr)
+				chain.push_back(c->mixin);
+		}
+		dartCls->mixins.assign(chain.rbegin(), chain.rend());
 	}
 }
 
@@ -724,7 +756,8 @@ void DartApp::finalizeFunctionsInfo()
 			}
 		}
 
-		// TODO: handle function result type and paramters type
+		// Result type and parameter types that the snapshot dropped are
+		// recovered later from the IL analysis (BackfillSignaturesFromAnalysis).
 	}
 
 	std::unordered_map<uint64_t, DartFunction*> new_functions;
@@ -782,8 +815,11 @@ void DartApp::finalizeFunctionsInfo()
 			// function type paramaters
 			const auto& type_params = dart::TypeParameters::Handle(sig.type_parameters());
 			if (!type_params.IsNull()) {
-				// TODO: function type parameters
-				//type_params.Print(dart::Thread::Current(), zone, false, 0, dart::Object::kScrubbedName, &buffer);
+				auto& tname = dart::String::Handle();
+				for (intptr_t i = 0; i < type_params.Length(); i++) {
+					tname = type_params.NameAt(i);
+					dartFn->Signature().typeParameterNames.push_back(tname.ToCString());
+				}
 			}
 
 			const intptr_t num_params = sig.NumParameters();
@@ -807,6 +843,33 @@ void DartApp::finalizeFunctionsInfo()
 
 				dartFn->Signature().params.push_back(FnParam{ dtype, std::move(name), isRequired });
 			}
+
+			// record the optional/named layout so callers can read it back
+			dartFn->Signature().numOptionalParam = (int)num_opt_params;
+			dartFn->Signature().hasNamedParam = num_opt_named_params > 0;
+		}
+	}
+}
+
+void DartApp::BackfillSignaturesFromAnalysis()
+{
+	for (auto& [_, dartFn] : functions) {
+		auto* data = dartFn->GetAnalyzedData();
+		if (data == nullptr)
+			continue;
+		auto& sig = dartFn->Signature();
+		auto& params = data->params;
+
+		// Fill only what the snapshot signature did not already provide, so an
+		// existing FunctionType signature is never overwritten.
+		if (sig.returnType == nullptr && data->returnType != nullptr)
+			sig.returnType = data->returnType;
+
+		if (sig.params.empty() && params.NumParam() > 0) {
+			for (auto& p : params.params)
+				sig.params.push_back(FnParam{ p.type, p.name, false });
+			sig.numOptionalParam = params.NumOptionalParam();
+			sig.hasNamedParam = params.isNamedParam;
 		}
 	}
 }
