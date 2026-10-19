@@ -95,6 +95,8 @@ Entries discovered by the Agent during task execution should follow this format:
   - 对比方法：浅克隆 https://github.com/worawit/blutter 到 /tmp/opencode/blutter_official，先 diff 文件清单（官方 blutter/src 43 文件全部存在，定制版多 CodeAnalyzer_x64.cpp/Disassembler_x64.cpp/Disassembler_x64.h），再逐文件 diff 定位差异；用 `git show <commit>:<path>` 取官方各版本文件与定制版比 diff 行数可精确锁定 fork 基线
   - CodeAnalyzer_arm64.cpp 中 try-catch 包裹 processCheckStackOverflowInstr 是定制版自研容错，合并官方补丁时须保留
   - 官方根目录 blutter.py/dartvm_fetch_build.py 是官方 dartvm 构建工具链，与定制版 scripts/build.py + packages/ 体系不同，不属于源码合并范畴
+  - x64 matcher 移植坑：`A64::Register` 内部是别名索引 0..15，裸 `x86_reg`（RAX..R15 为 34..49）与它直接比较恒为 false；比较必须写 `A64::Register{ insn.ops(0).reg } == out_reg`。2026-10-19 修正 7 处后 `condition not matched` 从 4492 降到 162
+  - `LoadInt32/Int64FromBoxOrSmi` 的 `[reg+reg+disp8]` 双倍地址形态：`sar reg,1` 后寄存器是 untagged 指针的一半，故 disp 取 `Mint::value_offset()`（8），不能再减 `kHeapObjectTag`；`BoxInt64` 慢路径可能被 `push fp/mov fp,SP ... mov SP,fp/pop fp` 包裹，池加载目标可能是 `TMP` 而非 `CODE_REG`
 
 [Project Knowledge Summary]
 - Date: 2026-09-02

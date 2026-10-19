@@ -110,7 +110,8 @@ cd /workspace
 - 逐函数对比 `out_real`（基线）与 `out_new` 的 `SetupParameters` 参数个数，要求零退化。
 - 校验参数个数与函数签名一致（闭包中未在 prologue 使用、仅存在于签名的参数允许缺省）。
 - 校验每个命名参数名称都能在同一输出文件的 PP 字符串表中找到。
-- 已知遗留：分析器对 `MOVSXD` 的 `processLoadStore` 匹配缺口会产生 `condition not matched` 日志（4492 行），与参数识别无关，不影响 exit code。
+- 分析器容错基线：`asm2il` 对每条未匹配指令输出 `condition not matched` 日志，2026-10-19 已清零（原 4492 条），可作为后续改动不引入解析退化的快速信号。
+- 同批修复的 x64 matcher 缺口（与参数识别无耦合，但影响整函数 IL 完整性）：`A64::Register` 与裸 `x86_reg` 的错误比较、`LoadInt32/Int64FromBoxOrSmi` 的 `movsxd`/`mov` 双倍地址形态、`BoxInt64` 的 `EnterFrame` 包装与 `TMP` 池加载调用。
 
 ## References
 
