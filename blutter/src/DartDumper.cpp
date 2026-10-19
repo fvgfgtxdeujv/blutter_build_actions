@@ -659,7 +659,23 @@ def set_member_cmt(struct_or_tif, offset, cmt):
 
 	of << "print('Setting Object Pool comments')\n";
 	for (const auto& [offset, comment] : comments) {
-		of << "set_member_cmt(pp_struct, " << offset << ", '''" << comment << "''')\n";
+		// Escape backslashes so Python does not interpret escapes such as
+		// \n / \xNN inside the triple-quoted literal, and break up any '''
+		// sequence that would terminate it early.
+		std::string escaped;
+		escaped.reserve(comment.size());
+		for (char c : comment) {
+			if (c == '\\')
+				escaped += "\\\\";
+			else
+				escaped += c;
+		}
+		size_t pos = 0;
+		while ((pos = escaped.find("'''", pos)) != std::string::npos) {
+			escaped.replace(pos, 3, "\\'\\'\\'");
+			pos += 6;
+		}
+		of << "set_member_cmt(pp_struct, " << offset << ", '''" << escaped << "''')\n";
 	}
 
 	of << "print('Script finished!')\n";
