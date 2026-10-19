@@ -14,15 +14,14 @@
 // IL layer (il.h / VarValue.h / CodeAnalyzer.h) is shared and arch-neutral;
 // A64::Register is an x64 register alias under the A64 namespace.
 //
-// TODO(gap-4): x64 prologue parity with arm64 (lower value, keep for backlog):
-//   1. indexed arg-slot reads "[fp + rdx*4 + 0x18]" (args vector walk) are not
-//      IL-bound yet; needs x64 ArgumentsDescriptor slot ABI confirmation.
-//   2. optional/named parameter prologue scan is a placeholder (see
-//      handleOptionalNamedParameters).
-//   Done: vars/state live across the whole matcher loop (asm2il), and plain
-//   "[fp + 0x10 + 8*i]" body reads bind late to arg_i (processFrameParameterLoad).
-//   Note: field-name/tear-off deepening is NOT the gap — arm64's main loop does
-//   not name fields in IL either.
+// Prologue parameter analysis is symbolic rather than shape-matched: the x64
+// compiler emits hundreds of equivalent instruction orders, so the scanner
+// tracks the ArgumentsDescriptor / argument-count data flow instead
+// (collectPrologueParameters + tryFixedParameter / tryOptionalPositionalParameter
+// / tryNamedParameter). Fixed params are recovered from Dart's ABI argument
+// registers (rdi, rsi, rdx, rbx, r8, r9), their local spills, and the caller
+// stack slots used by generic/closure functions; optional positional and named
+// parameters are recovered from the ArgumentsDescriptor.
 // ============================================================================
 
 // ----------------------------------------------------------------------------
@@ -309,9 +308,11 @@ public:
 	// prologue + parameters
 	void handlePrologue(AsmIterator& insn, uint64_t endPrologueAddr);
 	std::tuple<A64::Register, A64::Register> unboxParam(AsmIterator& insn, A64::Register expectedSrcReg = A64::Register{});
-	void handleFixedParameters(AsmIterator& insn);
-	void handleOptionalPositionalParameters(AsmIterator& insn);
-	void handleOptionalNamedParameters(AsmIterator& insn);
+	struct ParamScanCtx;
+	void collectPrologueParameters(AsmIterator& insn, ParamScanCtx& ctx);
+	bool tryFixedParameter(AsmIterator& insn, ParamScanCtx& ctx);
+	bool tryOptionalPositionalParameter(AsmIterator& insn, ParamScanCtx& ctx);
+	bool tryNamedParameter(AsmIterator& insn, ParamScanCtx& ctx);
 	void handleArgumentsDescriptorTypeArguments(AsmIterator& insn);
 	std::unique_ptr<SetupParametersInstr> processPrologueParametersInstr(AsmIterator& insn, uint64_t endPrologueAddr);
 	StoreLocalResult handleStoreLocal(AsmIterator& insn, A64::Register expectedSrcReg = A64::Register{});
@@ -1545,99 +1546,319 @@ std::tuple<A64::Register, A64::Register> FunctionAnalyzer::unboxParam(AsmIterato
 	return { dstReg, srcReg };
 }
 
-void FunctionAnalyzer::handleFixedParameters(AsmIterator& insn)
-{
-	// x64 AOT: fixed parameters are read directly from the caller stack,
-	// [rbp + 8*(i+2)] (+8 return addr, +8 saved rbp), and usually copied to a
-	// local slot at a negative offset from rbp.
-	int paramCnt = dartFn->NumParam();
-	if (paramCnt == 0)
-		paramCnt = INT_MAX;
-	for (auto i = 0; i < paramCnt; i++) {
-		if (!(insn.id() == X86_INS_MOV && insn.op_count() == 2 && IsX86Reg(insn.ops(0)) && IsX86Mem(insn.ops(1)) &&
-			IsCsDartFp((x86_reg)insn.ops(1).mem.base) && insn.ops(1).mem.disp >= 0x10))
-			break;
-		const auto valReg = A64::Register{ insn.ops(0).reg };
-		++insn;
+// Symbolic state for the parameter prologue. x64 AOT emits several different
+// shapes for the same semantic step, so the scan tracks where the argument
+// count / ArgumentsDescriptor came from instead of matching exact instruction
+// sequences (the arm64 analyzer can match exact shapes; x64 cannot).
+struct FunctionAnalyzer::ParamScanCtx {
+	struct FixedSlot {
+		bool set{ false };
+		A64::Register paramReg; // ABI register carrying the value
+		A64::Register valReg;   // register holding the value after the prologue
+		int32_t localOffset{ 0 };
+		DartType* type{ nullptr };
+		std::string name;
+	};
 
-		fnInfo->State()->ClearRegister(valReg);
-		auto val = fnInfo->Vars()->ValParam(fnInfo->params.NumParam());
-		fnInfo->State()->SetRegister(valReg, val);
+	std::vector<FixedSlot> fixed;
+	std::vector<FnParamInfo> optPos;
+	std::vector<int> optPosIdx;
+	std::vector<FnParamInfo> named;
+	std::array<int, A64::Register::kNumberOfRegisters> regParam;
+	A64::Register countReg;
+	bool countKnown{ false };
+	bool stackFixed{ false }; // fixed params live on the caller stack
+	bool anyRecognized{ false };
+	int numFixed{ -1 }; // -1: not known yet
 
-		// the parameter value might be saved to stack as a local variable
-		const auto storeRes = handleStoreLocal(insn, valReg);
-		if (storeRes.fpOffset != 0) {
-			fnInfo->State()->SetLocal(storeRes.fpOffset, val);
-		}
+	ParamScanCtx() { regParam.fill(-1); }
 
-		fnInfo->params.add(FnParamInfo{ valReg, storeRes.fpOffset });
+	int NumFixed() const { return numFixed >= 0 ? numFixed : (int)fixed.size(); }
+	void EnsureFixed(int i) {
+		if (i >= (int)fixed.size())
+			fixed.resize(i + 1);
 	}
+};
 
-	fnInfo->params.numFixedParam = fnInfo->params.NumParam();
-	if (!dartFn->IsStatic() && fnInfo->params.numFixedParam > 0) {
-		// class method. first parameter is "this"
-		fnInfo->params[0].name = "this";
-		fnInfo->params[0].type = dartFn->Class().DeclarationType();
-	}
-}
-
-void FunctionAnalyzer::handleOptionalPositionalParameters(AsmIterator& insn)
+bool FunctionAnalyzer::tryFixedParameter(AsmIterator& insn, ParamScanCtx& ctx)
 {
-	// Optional positional parameters on x64 AOT are handled with the same
-	// ArgumentsDescriptor pattern as arm64, but without writeback/extended
-	// addressing. The compiler emits a sequence of:
-	//   cmp <count_reg>, #(i+1)<<1 ; jl <defaults_i>
-	// followed by loading the passed values from [rbp + off] and the default
-	// values from PP / immediates.
-	int i = 0;
-	while (insn.id() == X86_INS_CMP && insn.op_count() == 2 && IsX86Reg(insn.ops(0)) && IsX86Imm(insn.ops(1))) {
-		const auto paramCntReg = insn.ops(0).reg;
-		if (insn.ops(1).imm != ((int64_t)(i + 1) << 1))
-			break;
-		++insn;
+	InsnMarker marker(insn);
+	auto isLocalOffset = [&](int64_t off) {
+		return off < 0 && (uint64_t)(-off) <= (uint64_t)fnInfo->stackSize && ((-off) & 7) == 0;
+	};
 
-		if (!(insn.id() == X86_INS_JL))
-			break;
-		const auto defaultValueTarget = insn.BranchTarget();
-		++insn;
-
-		// parameter might not be used and no loading value
-		if (insn.id() == X86_INS_MOV && insn.op_count() == 2 && IsX86Reg(insn.ops(0)) && IsX86Mem(insn.ops(1)) &&
-			IsCsDartFp((x86_reg)insn.ops(1).mem.base) && insn.ops(1).mem.disp > 0) {
-			const auto valReg = A64::Register{ insn.ops(0).reg };
-			fnInfo->State()->ClearRegister(valReg);
-			auto val = fnInfo->Vars()->ValParam(fnInfo->params.NumParam());
-			fnInfo->State()->SetRegister(valReg, val);
-			fnInfo->params.add(FnParamInfo{ valReg });
-			++insn;
-
-			const auto storeRes = handleStoreLocal(insn, valReg);
-			if (storeRes.fpOffset != 0) {
-				fnInfo->State()->SetLocal(storeRes.fpOffset, val);
+	// (a) ABI argument register spilled to a local slot: mov [fp - N], argReg
+	if (!ctx.stackFixed && insn.id() == X86_INS_MOV && insn.op_count() == 2 &&
+		IsX86Mem(insn.ops(0)) && IsX86Reg(insn.ops(1))) {
+		const auto& mem = insn.ops(0).mem;
+		const A64::Register srcReg{ insn.ops(1).reg };
+		const int idx = (int)srcReg >= 0 ? ctx.regParam[(int)srcReg] : -1;
+		if (idx >= 0 && idx < 64 && IsCsDartFp((x86_reg)mem.base) && isLocalOffset(mem.disp)) {
+			ctx.EnsureFixed(idx);
+			auto& slot = ctx.fixed[idx];
+			if (!slot.set) {
+				slot.set = true;
+				slot.paramReg = srcReg;
+				slot.valReg = srcReg;
+				slot.localOffset = (int32_t)mem.disp;
+				fnInfo->State()->SetLocal((int)mem.disp, fnInfo->Vars()->ValParam(idx));
+				ctx.anyRecognized = true;
+				++insn;
+				marker.Take();
+				return true;
 			}
 		}
-		else {
-			fnInfo->params.add(FnParamInfo{});
-		}
-
-		++i;
 	}
-}
 
-void FunctionAnalyzer::handleOptionalNamedParameters(AsmIterator& insn)
-{
-	// Named parameters are matched from the ArgumentsDescriptor. x64 keeps the
-	// descriptor in R10 (ARGS_DESC_REG). Detection mirrors the arm64 path:
-	// values are loaded from [desc_base + disp] with disp >= first_named_entry.
-	auto argsDescReg = X86_REG_INVALID;
+	// (b) register shuffle of an argument register (e.g. mov rsi, rdi)
+	if (!ctx.stackFixed && insn.id() == X86_INS_MOV && insn.op_count() == 2 &&
+		IsX86Reg(insn.ops(0)) && IsX86Reg(insn.ops(1))) {
+		const A64::Register dstReg{ insn.ops(0).reg };
+		const A64::Register srcReg{ insn.ops(1).reg };
+		const int idx = (int)srcReg >= 0 ? ctx.regParam[(int)srcReg] : -1;
+		if (idx >= 0 && (int)dstReg >= 0) {
+			ctx.regParam[(int)dstReg] = idx;
+			fnInfo->State()->SetRegister(dstReg, fnInfo->Vars()->ValParam(idx));
+			ctx.anyRecognized = true;
+			++insn;
+			marker.Take();
+			return true;
+		}
+	}
+
+	// (c) caller stack slot read: mov dst, [fp + disp] or
+	//     mov dst, [fp + countReg*4 + disp] (fixed params in a stack CC).
 	if (insn.id() == X86_INS_MOV && insn.op_count() == 2 && IsX86Reg(insn.ops(0)) && IsX86Mem(insn.ops(1))) {
 		const auto& mem = insn.ops(1).mem;
-		if (IsCsDartFp((x86_reg)mem.base) && mem.disp >= 0 && fnInfo->State()->GetValue((x86_reg)mem.base) == fnInfo->Vars()->ValArgsDesc()) {
-			argsDescReg = mem.base;
+		if (IsCsDartFp((x86_reg)mem.base) && mem.disp >= 0x10 && (mem.disp & 7) == 0) {
+			int idx = -1;
+			if (mem.index != X86_REG_INVALID) {
+				// params are laid out after the optional ones: the fixed param
+				// index is derived from the remaining stack offset.
+				if (ctx.countKnown && ctx.NumFixed() > 0 &&
+					A64::Register{ (x86_reg)mem.index } == ctx.countReg) {
+					idx = ctx.NumFixed() + 1 - (int)(mem.disp >> 3);
+				}
+			}
+			else {
+				// plain caller-stack slot (also used by closures, whose
+				// parameters start after the closure context)
+				idx = (int)(mem.disp >> 3) - 2;
+			}
+			if (idx >= 0 && (ctx.numFixed < 0 || idx < ctx.numFixed)) {
+				const auto valReg = A64::Register{ insn.ops(0).reg };
+				++insn;
+				ctx.EnsureFixed(idx);
+				auto& slot = ctx.fixed[idx];
+				slot.set = true;
+				slot.valReg = valReg;
+				fnInfo->State()->ClearRegister(valReg);
+				fnInfo->State()->SetRegister(valReg, fnInfo->Vars()->ValParam(idx));
+				const auto storeRes = handleStoreLocal(insn, valReg);
+				if (isLocalOffset(storeRes.fpOffset)) {
+					slot.localOffset = storeRes.fpOffset;
+					fnInfo->State()->SetLocal(storeRes.fpOffset, fnInfo->Vars()->ValParam(idx));
+				}
+				ctx.anyRecognized = true;
+				marker.Take();
+				return true;
+			}
 		}
 	}
-	// placeholder: full named-parameter analysis requires real app.so samples to
-	// pin down the x64 descriptor access shapes.
+
+	return false;
+}
+
+bool FunctionAnalyzer::tryOptionalPositionalParameter(AsmIterator& insn, ParamScanCtx& ctx)
+{
+	if (!ctx.countKnown)
+		return false;
+	InsnMarker marker(insn);
+
+	// cmp <count>, #(i+1)<<1 ; jl <defaults>
+	const int i = (int)ctx.optPos.size();
+	if (!(insn.id() == X86_INS_CMP && insn.op_count() == 2 && IsX86Reg(insn.ops(0)) &&
+		A64::Register{ insn.ops(0).reg } == ctx.countReg && IsX86Imm(insn.ops(1))))
+		return false;
+	if (insn.ops(1).imm != ((int64_t)(i + 1) << 1))
+		return false;
+	++insn;
+	if (!insn.IsJcc())
+		return false;
+	const uint64_t defaultTarget = insn.BranchTarget();
+	++insn;
+
+	FnParamInfo param;
+	if (defaultTarget != insn.address()) {
+		// the parameter might not be used: branch straight to the defaults
+		if (insn.id() == X86_INS_MOV && insn.op_count() == 2 && IsX86Reg(insn.ops(0)) && IsX86Mem(insn.ops(1))) {
+			const auto& mem = insn.ops(1).mem;
+			if (IsCsDartFp((x86_reg)mem.base) && A64::Register{ (x86_reg)mem.index } == ctx.countReg && mem.disp == 8) {
+				const auto valReg = A64::Register{ insn.ops(0).reg };
+				++insn;
+				const int paramIdx = ctx.NumFixed() + i;
+				fnInfo->State()->ClearRegister(valReg);
+				fnInfo->State()->SetRegister(valReg, fnInfo->Vars()->ValParam(paramIdx));
+				const auto storeRes = handleStoreLocal(insn, valReg);
+				if (storeRes.fpOffset < 0 && (uint64_t)(-storeRes.fpOffset) <= (uint64_t)fnInfo->stackSize &&
+					((-storeRes.fpOffset) & 7) == 0) {
+					fnInfo->State()->SetLocal(storeRes.fpOffset, fnInfo->Vars()->ValParam(paramIdx));
+				}
+				param.valReg = valReg;
+				param.localOffset = storeRes.fpOffset;
+			}
+		}
+	}
+
+	ctx.optPosIdx.push_back(ctx.NumFixed() + i);
+	ctx.optPos.push_back(std::move(param));
+	ctx.anyRecognized = true;
+	marker.Take();
+	return true;
+}
+
+bool FunctionAnalyzer::tryNamedParameter(AsmIterator& insn, ParamScanCtx& ctx)
+{
+	if (!ctx.countKnown)
+		return false;
+	InsnMarker marker(insn);
+
+	const int64_t firstNamed = AOT_ArgumentsDescriptor_first_named_entry_offset - dart::kHeapObjectTag;
+	const int64_t entrySize = AOT_ArgumentsDescriptor_named_entry_size;
+
+	// mov name, [ArgumentsDescriptor + first_named_entry + k*entry_size]
+	if (!(insn.id() == X86_INS_MOV && insn.op_count() == 2 && IsX86Reg(insn.ops(0)) && IsX86Mem(insn.ops(1))))
+		return false;
+	const auto& mem = insn.ops(1).mem;
+	if (mem.index != X86_REG_INVALID || mem.disp < firstNamed)
+		return false;
+	if ((mem.disp - firstNamed) % entrySize != 0)
+		return false;
+	const x86_reg base = (x86_reg)mem.base;
+	if (!(base == CSREG_ARGS_DESC ||
+		fnInfo->State()->GetValue(A64::Register{ base }) == fnInfo->Vars()->ValArgsDesc()))
+		return false;
+
+	const int k = (int)((mem.disp - firstNamed) / entrySize);
+	// named entries are scanned in declaration order; reject holes so the
+	// positional index stays in sync with the ArgumentsDescriptor.
+	if (k < 0 || k >= 64 || k != (int)ctx.named.size())
+		return false;
+	const A64::Register nameReg{ insn.ops(0).reg };
+	++insn;
+
+	// cmp name, [PP + <string>]
+	if (!(insn.id() == X86_INS_CMP && insn.op_count() == 2 && IsX86Reg(insn.ops(0)) &&
+		A64::Register{ insn.ops(0).reg } == nameReg && IsX86Mem(insn.ops(1)) &&
+		IsCsDartPp((x86_reg)insn.ops(1).mem.base)))
+		return false;
+
+	std::string name;
+	try {
+		auto* obj = getPoolObject(app, insn.ops(1).mem.disp, A64::Register{});
+		if (obj->RawTypeId() == dart::kStringCid)
+			name = static_cast<VarString*>(obj)->str;
+		else
+			return false;
+	}
+	catch (...) {
+		return false;
+	}
+
+	if (k >= (int)ctx.named.size())
+		ctx.named.resize(k + 1);
+	ctx.named[k].name = name;
+	ctx.anyRecognized = true;
+	++insn; // consume the compare
+	marker.Take();
+	return true;
+}
+
+void FunctionAnalyzer::collectPrologueParameters(AsmIterator& insn, ParamScanCtx& ctx)
+{
+	auto isLocalOffset = [&](int64_t off) {
+		return off < 0 && (uint64_t)(-off) <= (uint64_t)fnInfo->stackSize && ((-off) & 7) == 0;
+	};
+	bool progress = true;
+	while (progress) {
+		if (insn.IsEnd())
+			break;
+		// CheckStackOverflow marks the end of the parameter prologue.
+		if (insn.id() == X86_INS_CMP && insn.op_count() == 2 && IsX86Reg(insn.ops(0)) &&
+			insn.ops(0).reg == X86_REG_RSP)
+			break;
+		progress = false;
+
+		// ArgumentsDescriptor saved to a local slot: mov [fp - N], r10
+		if (insn.id() == X86_INS_MOV && insn.op_count() == 2 && IsX86Mem(insn.ops(0)) && IsX86Reg(insn.ops(1)) &&
+			IsCsDartFp((x86_reg)insn.ops(0).mem.base) && insn.ops(1).reg == CSREG_ARGS_DESC &&
+			isLocalOffset(insn.ops(0).mem.disp)) {
+			fnInfo->State()->SetLocal((int)insn.ops(0).mem.disp, fnInfo->Vars()->ValArgsDesc());
+			++insn;
+			progress = true;
+			continue;
+		}
+
+		// ArgumentsDescriptor loaded from a local slot: mov reg, [fp - N]
+		if (insn.id() == X86_INS_MOV && insn.op_count() == 2 && IsX86Reg(insn.ops(0)) && IsX86Mem(insn.ops(1)) &&
+			IsCsDartFp((x86_reg)insn.ops(1).mem.base) && isLocalOffset(insn.ops(1).mem.disp) &&
+			fnInfo->State()->GetLocal((int)insn.ops(1).mem.disp) == fnInfo->Vars()->ValArgsDesc()) {
+			fnInfo->State()->SetRegister(A64::Register{ insn.ops(0).reg }, fnInfo->Vars()->ValArgsDesc());
+			++insn;
+			progress = true;
+			continue;
+		}
+
+		// Argument count: mov cnt, [ArgumentsDescriptor + count_offset]
+		if (insn.id() == X86_INS_MOV && insn.op_count() == 2 && IsX86Reg(insn.ops(0)) && IsX86Mem(insn.ops(1)) &&
+			insn.ops(1).mem.disp == AOT_ArgumentsDescriptor_count_offset - dart::kHeapObjectTag) {
+			const x86_reg base = (x86_reg)insn.ops(1).mem.base;
+			if (base == CSREG_ARGS_DESC ||
+				fnInfo->State()->GetValue(A64::Register{ base }) == fnInfo->Vars()->ValArgsDesc()) {
+				A64::Register countReg{ insn.ops(0).reg };
+				++insn;
+				// the count might be copied before the fixed parameters are
+				// subtracted: mov tmp, cnt ; sub tmp, 2*numFixed
+				{
+					AsmIterator peek = insn;
+					if (peek.id() == X86_INS_MOV && peek.op_count() == 2 && IsX86Reg(peek.ops(0)) &&
+						IsX86Reg(peek.ops(1)) && A64::Register{ peek.ops(1).reg } == countReg) {
+						AsmIterator after = peek;
+						++after;
+						if (after.id() == X86_INS_SUB && after.op_count() == 2 && IsX86Reg(after.ops(0)) &&
+							A64::Register{ after.ops(0).reg } == A64::Register{ peek.ops(0).reg } && IsX86Imm(after.ops(1)) &&
+							after.ops(1).imm >= 0 && (after.ops(1).imm & 1) == 0) {
+							countReg = A64::Register{ peek.ops(0).reg };
+							++insn; // consume the copy
+						}
+					}
+				}
+				if (insn.id() == X86_INS_SUB && insn.op_count() == 2 && IsX86Reg(insn.ops(0)) &&
+					A64::Register{ insn.ops(0).reg } == countReg && IsX86Imm(insn.ops(1)) &&
+					insn.ops(1).imm >= 0 && (insn.ops(1).imm & 1) == 0) {
+					const int64_t nf = insn.ops(1).imm >> 1;
+					if (ctx.numFixed < 0 && nf > 0 && nf <= 64)
+						ctx.numFixed = (int)nf;
+					++insn;
+				}
+				ctx.countReg = countReg;
+				ctx.countKnown = true;
+				// no register parameter was spilled before the count was read:
+				// this function reads its fixed parameters from the caller stack.
+				if (ctx.fixed.empty())
+					ctx.stackFixed = true;
+				fnInfo->State()->SetRegister(countReg, fnInfo->Vars()->ValCurrNumNameParam());
+				progress = true;
+				continue;
+			}
+		}
+
+		const bool f = tryFixedParameter(insn, ctx);
+		const bool o = !f && tryOptionalPositionalParameter(insn, ctx);
+		const bool n = !f && !o && tryNamedParameter(insn, ctx);
+		if (f || o || n)
+			progress = true;
+	}
 }
 
 void FunctionAnalyzer::handleArgumentsDescriptorTypeArguments(AsmIterator& insn)
@@ -1668,15 +1889,78 @@ std::unique_ptr<SetupParametersInstr> FunctionAnalyzer::processPrologueParameter
 		++insn;
 	}
 
-	// ArgumentsDescriptor (R10) might be saved to the local slot first
-	if (insn.id() == X86_INS_MOV && insn.op_count() == 2 && IsX86Mem(insn.ops(0)) && IsX86Reg(insn.ops(1)) &&
-		IsCsDartFp((x86_reg)insn.ops(0).mem.base) && insn.ops(1).reg == X86_REG_R10) {
-		++insn;
+	ParamScanCtx ctx;
+	// The Dart signature (when present) is authoritative for the fixed count.
+	if (dartFn->NumParam() > 0) {
+		const int nf = dartFn->NumParam() - dartFn->NumOptionalParam();
+		ctx.numFixed = nf > 0 ? nf : 0;
 	}
 
-	handleFixedParameters(insn);
-	handleOptionalPositionalParameters(insn);
-	handleOptionalNamedParameters(insn);
+	if (!dartFn->IsFfi()) {
+		// Dart x64 calling convention: rdi, rsi, rdx, rbx, r8, r9.
+		static constexpr int kArgRegs[] = { 7, 6, 2, 3, 8, 9 };
+		for (int i = 0; i < 6; i++)
+			ctx.regParam[kArgRegs[i]] = i;
+		collectPrologueParameters(insn, ctx);
+	}
+
+	if (ctx.anyRecognized) {
+		const int numFixed = std::min(ctx.NumFixed(), 64);
+		ctx.EnsureFixed(numFixed);
+		// The snapshot signature (when it survived obfuscation) names/types
+		// each parameter by its *slot index*, which is exact even when some
+		// slots are missing from the prologue.
+		auto& sigParams = dartFn->Params();
+		const bool hasSig = dartFn->NumParam() > 0 && !sigParams.empty();
+		for (int i = 0; i < numFixed; i++) {
+			auto& slot = ctx.fixed[i];
+			if (!slot.set)
+				continue;
+			if (hasSig && i < (int)sigParams.size()) {
+				if (!sigParams[i].name.empty())
+					slot.name = sigParams[i].name;
+				if (sigParams[i].type != nullptr && sigParams[i].type->IsType())
+					slot.type = sigParams[i].type->AsType();
+			}
+			fnInfo->params.addFixedParam(
+				FnParamInfo{ slot.paramReg, slot.valReg, slot.localOffset });
+			auto& param = fnInfo->params.back();
+			param.name = std::move(slot.name);
+			param.type = slot.type;
+		}
+		for (size_t k = 0; k < ctx.optPos.size(); k++) {
+			auto& param = ctx.optPos[k];
+			const int idx = k < ctx.optPosIdx.size() ? ctx.optPosIdx[k] : -1;
+			if (hasSig && idx >= 0 && idx < (int)sigParams.size()) {
+				if (!sigParams[idx].name.empty())
+					param.name = sigParams[idx].name;
+				if (param.type == nullptr && sigParams[idx].type != nullptr && sigParams[idx].type->IsType())
+					param.type = sigParams[idx].type->AsType();
+			}
+			fnInfo->params.add(std::move(param));
+		}
+		for (auto& param : ctx.named) {
+			// Named parameters are matched by name; their positional index in
+			// the signature depends on which optional ones were passed.
+			if (hasSig && param.type == nullptr && !param.name.empty()) {
+				for (auto& sp : sigParams) {
+					if (sp.name == param.name && sp.type != nullptr && sp.type->IsType()) {
+						param.type = sp.type->AsType();
+						break;
+					}
+				}
+			}
+			fnInfo->params.add(std::move(param));
+		}
+		fnInfo->params.isNamedParam = !ctx.named.empty();
+
+		if (!dartFn->IsStatic() && fnInfo->params.numFixedParam > 0 && fnInfo->params[0].name.empty()) {
+			// the first parameter of an instance method is the receiver
+			fnInfo->params[0].name = "this";
+			fnInfo->params[0].type = dartFn->Class().DeclarationType();
+		}
+	}
+
 	handleArgumentsDescriptorTypeArguments(insn);
 
 	return std::make_unique<SetupParametersInstr>(insn.Wrap(marker.Take()), &fnInfo->params);
@@ -1700,6 +1984,9 @@ void FunctionAnalyzer::handlePrologue(AsmIterator& insn, uint64_t endPrologueAdd
 			return;
 		}
 		fnInfo->AddIL(std::move(ilAlloc));
+		// stackSize is known now; the state created in asm2il() was sized for 0
+		// locals, so recreate it before any prologue handler writes a local slot.
+		fnInfo->InitState();
 	}
 
 	bool hasPrologue = false;

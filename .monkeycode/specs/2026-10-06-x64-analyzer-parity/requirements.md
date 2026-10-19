@@ -2,7 +2,7 @@
 
 ## Introduction
 
-blutter 的 x64 IL 分析器（`blutter/src/CodeAnalyzer_x64.cpp`）是从 arm64 分析器移植而来，但两处关键能力尚未对齐：一是索引式参数槽读取（如 `[fp + rdx*4 + 0x18]`）未绑定到 IL 参数；二是可选参数与命名参数的 prologue 扫描为占位实现（`handleOptionalNamedParameters`，第 1627 行）。结果是 Flutter Windows 桌面 x64 `app.so` 的参数识别、变量命名与可选/命名参数还原弱于 Android arm64。本功能把 arm64 的对应分析补齐到 x64。
+blutter 的 x64 IL 分析器（`blutter/src/CodeAnalyzer_x64.cpp`）是从 arm64 分析器移植而来，但两处关键能力尚未对齐：一是索引式参数槽读取（如 `[fp + rdx*4 + 0x18]`）未绑定到 IL 参数；二是可选参数与命名参数的 prologue 扫描缺失。结果是 Flutter Windows 桌面 x64 `app.so` 的参数识别、变量命名与可选/命名参数还原弱于 Android arm64。本功能以符号解释方式把 arm64 的对应分析能力补齐到 x64。
 
 ## Glossary
 
@@ -45,7 +45,7 @@ blutter 的 x64 IL 分析器（`blutter/src/CodeAnalyzer_x64.cpp`）是从 arm64
 1. WHEN prologue 从 ArgumentsDescriptor 读取命名参数名称，系统 SHALL 将名称与函数签名的可选命名参数（按字典序）逐一匹配。
 2. WHEN 某命名参数为 `required`，系统 SHALL 标记该参数为必需并在未匹配时继续扫描后续命名参数。
 3. WHEN prologue 读取命名参数的名称或位置字段，系统 SHALL 依据 `AOT_ArgumentsDescriptor_name_offset` / `AOT_ArgumentsDescriptor_position_offset` 区分二者。
-4. WHEN 扫描结束，系统 SHALL 清除为加载命名参数而引入的临时变量。
+4. WHEN 扫描结束，系统 SHALL 不遗留为加载命名参数而引入的临时变量。
 5. WHEN 一个可选位置参数由实参个数寄存器判定是否传入，系统 SHALL 通过 ArgumentsDescriptor 的实参个数确定可选参数数量。
 
 ### R4 与 arm64 分析器共享 IL 层
@@ -63,6 +63,6 @@ blutter 的 x64 IL 分析器（`blutter/src/CodeAnalyzer_x64.cpp`）是从 arm64
 
 #### Acceptance Criteria
 
-1. WHEN 一个函数没有可选参数与命名参数，系统 SHALL 输出与改动前一致的 IL 与 `asm/*.dart` 参数标注。
+1. WHEN 一个函数没有可选参数与命名参数，系统 SHALL 至少保留改动前已识别的固定参数，且不改变已识别参数的序号绑定。
 2. WHEN arm64 分析路径运行，系统 SHALL 输出与改动前一致的结果。
 3. WHEN x64 遇到未识别的 prologue 模式，系统 SHALL 保留占位前的行为并继续分析后续指令。

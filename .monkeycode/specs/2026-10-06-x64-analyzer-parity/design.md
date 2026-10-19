@@ -1,94 +1,122 @@
 # 设计文档：x64 IL 分析器对齐 arm64
 
 Feature Name: x64-analyzer-parity
-Updated: 2026-10-06
+Updated: 2026-10-19
 
 ## Description
 
-把 `CodeAnalyzer_arm64.cpp` 中已经成熟的参数 prologue 分析移植到 `CodeAnalyzer_x64.cpp`：
+把 arm64 分析器已经成熟的参数 prologue 分析能力对齐到 `CodeAnalyzer_x64.cpp`：识别固定参数、可选位置参数与命名参数，并绑定到 `FnParams`。
 
-- 新增 `handleFixedParameters`，在 prologue 中按调用约定登记固定参数（对应 arm64 第 954 行）。
-- 用完整实现替换 `handleOptionalNamedParameters` 的占位（当前第 1627 行），包括命名参数名称匹配、`required` 处理、名称/位置字段区分与临时变量清理（对应 arm64 第 1149 行）。
-- 绑定索引式参数槽读取 `[fp + reg*4 + disp]` 到 IL 参数。
+实现采用**策略 A：符号解释**。arm64 用逐指令形状匹配即可覆盖，因为其 prologue 由 `PrologueBuilder` 生成、形态稳定；x64 AOT 的同一语义步骤有大量等价形态（参数留在寄存器、spill 到局部槽、经 ArgumentsDescriptor 索引、闭包上下文前置参数等），逐形状匹配会不断漏配。因此 x64 侧改为跟踪“参数个数寄存器来自哪里、ArgumentsDescriptor 在哪里、某寄存器当前承载第几个参数”的符号状态，再按语义步骤消费指令。
 
-两架构共享 IL 层（`il.h`、`VarValue.h`、`CodeAnalyzer.h` 的 `FnParams` / `AnalyzingState` / `AnalyzingVars`），差异集中在寻址方式（x64 变长指令、内存操作数）与寄存器 ABI。移植以 arm64 逻辑为蓝本，参数化架构相关的常量与寄存器解析。
+x64 与 arm64 共享 IL 层（`FnParams`、`FnParamInfo`、`AnalyzingState`、`AnalyzingVars`），差异只在寻址与寄存器 ABI。
 
 ## Architecture
 
 ```mermaid
 graph TD
-    A["asm2il 主匹配循环 (x64)"] --> B["handleFixedParameters"]
-    A --> C["handleOptionalNamedParameters"]
-    A --> D["processFrameParameterLoad"]
-    C --> E["ArgumentsDescriptor 遍历"]
-    E --> F["FnParams::add / addFixedParam"]
-    B --> F
-    D --> F
-    F --> G["AnalyzingState / VarParam"]
-    G --> H["IL: LoadValue / SetupParameters"]
+    A["asm2il 主循环"] --> B["processPrologueParametersInstr"]
+    B --> C["collectPrologueParameters"]
+    C --> D["tryFixedParameter"]
+    C --> E["tryOptionalPositionalParameter"]
+    C --> F["tryNamedParameter"]
+    D --> G["ParamScanCtx (regParam / fixed / countReg)"]
+    E --> G
+    F --> G
+    G --> H["物化: addFixedParam / add"]
+    H --> I["快照签名补 name/type"]
+    I --> J["SetupParametersInstr"]
 ```
 
-新增/修改的 handler 在 `FunctionAnalyzer` 内按 arm64 同样的调用点接入 `asm2il` 主循环，摆在现有 `handleArgumentsDescriptorTypeArguments`（第 1643 行）之前。
+### ParamScanCtx
+
+| 字段 | 含义 |
+| --- | --- |
+| `fixed[]` | 固定参数槽：`set`、`paramReg`、`valReg`、`localOffset`、`paramOffset`、`name`、`type` |
+| `optPos[]` / `optPosIdx[]` | 可选位置参数及其真实参数序号 |
+| `named[]` | 命名参数（名称来自 PP 字符串比较） |
+| `regParam[16]` | x64 寄存器 → 参数序号（包含 `mov dst, src` 传播） |
+| `countReg` / `countKnown` | 实参个数寄存器及其是否已知 |
+| `numFixed` | 固定参数个数（`-1` 表示未知） |
 
 ## Components and Interfaces
 
-### CodeAnalyzer_x64.cpp
+### 1. `collectPrologueParameters`
 
-1. **`void handleFixedParameters(AsmIterator& insn, x86_reg paramCntReg, int paramCnt = 0)`**
-   - 对应 arm64 `handleFixedParameters`（第 954 行）。识别参数保存模式：从参数寄存器/实参向量槽加载并存入局部槽。
-   - x64 调用约定：Windows x64 前 4 个实参走 `rcx`/`rdx`/`r8`/`r9`，其余走栈；但 Dart AOT 内部约定的“参数寄存器”以 IL 层的 `A64::Register` 别名为准（x64 上为寄存器索引），移植时沿用同一别名映射。
-   - 上界取 `dartFn->NumParam()`；为 0 时取 `INT_MAX`（沿用当前第 1553-1555 行的处理）。
+在 `SetupParameters` 阶段循环调用三个 `try*`，任一步前进即继续；遇到 `cmp SP, [THR+stack_limit]`（CheckStackOverflow）退出。循环上界按 `fnInfo->stackSize` 校验局部偏移，参数序号 clamp 到 64。
 
-2. **`void handleOptionalNamedParameters(AsmIterator& insn, x86_reg paramCntReg)`（替换占位）**
-   - 对应 arm64 第 1149 行。核心步骤：
-     a. 识别 `mov reg, [ArgumentsDescriptor + first_named_entry_offset - kHeapObjectTag]` 起始加载；
-     b. 依 `AOT_ArgumentsDescriptor_named_entry_size` 步进，读取参数名称与位置；
-     c. 与 `fnInfo->params` 中按字典序排列的可选命名参数逐一比较，处理 `required` 跳过、最后一项与未使用参数；
-     d. 结束时清除 `valNameParamName` / `valNameArgIdx` / `currParamOffset` 等临时变量。
-   - 名称与位置字段的区分沿用 arm64 的 `name_offset` / `position_offset` 判定（第 1299-1362 行）。
+### 2. `tryFixedParameter`
 
-3. **索引参数槽绑定**
-   - 在 `processFrameParameterLoad`（第 1273 行）与主循环中，识别 `[fp + idxReg*4 + disp]`；当 `idxReg` 已被标记为命名参数索引变量时，把读取绑定到 `FnParams` 对应参数（复用 `fnInfo->params.findValReg` / `movValReg`）。
+按优先级识别三种形态：
 
-4. **去除 `TODO(gap-4)` 注释块**（第 17-25 行）：两项完成后更新块内容为“已完成”。
+1. **寄存器直传**：`mov dst, src`，`src` 已在 `regParam` 中 → 传播参数序号。
+2. **参数寄存器**：`mov dst, <argReg>`（`rdi`/`rsi`/`rdx`/`rbx`/`r8`/`r9`）→ 绑定对应序号。
+3. **调用者栈读取**：`mov dst, [fp + disp]`（`disp >= 0x10`）→ `idx = disp/8 - 2`；`mov dst, [fp + countReg*4 + disp]` → `idx = numFixed + 1 - disp/8`。闭包同样适用（其参数位于闭包上下文之后）。
 
-### 共享结构
+命中后登记 `valReg`/`localOffset`，并把 `ValParam(idx)` 写入寄存器与局部状态。
 
-不修改 `CodeAnalyzer.h` 的公共结构；仅使用现有 `FnParams`、`FnParamInfo`、`AnalyzingState::SetLocal/GetLocal`、`AnalyzingVars::ValParam/ValArgsDesc/ValCurrNumNameParam`。
+### 3. `tryOptionalPositionalParameter`
+
+识别 `cmp <countReg>, #(i+1)<<1 ; jcc <defaults>`，再匹配 `mov dst, [fp + countReg*4 + 8]` 的取值；未使用参数只登记空槽。参数序号为 `NumFixed() + i`，记录在 `optPosIdx`。
+
+### 4. `tryNamedParameter`
+
+从 `mov reg, [ARGS_DESC + first_named_entry_offset]` 起步，按 `named_entry_size` 步进，用 `LoadField`/字符串比较识别 `name` 与 `position` 字段；名称与 PP 表字符串相等时登记命名参数并推进 `k`。该扫描只消费到名称比较为止，后续分支仍由主循环处理。
+
+### 5. 物化
+
+- 只登记**实际检测到**的固定参数槽（不按签名个数补空位），序号映射与 arm64 一致；未检测的槽不产生伪寄存器标注。
+- 快照签名存在时按**槽序号**补 `name`/`type`；可选位置参数按 `optPosIdx` 补；命名参数按名称精确匹配补 `type`。
+- 实例方法且首个参数无名称时命名为 `this`，类型取 `Class().DeclarationType()`。
+
+### 6. `handlePrologue` 状态重建
+
+`AnalyzingState` 依赖 `stackSize` 分配局部变量表。`asm2il` 早期构造时 `stackSize=0`，因此在 `AllocStack` 加入 IL 后用真实 `stackSize` 重新 `fnInfo->InitState()`，避免后续访问局部槽越界（崩溃修复点）。
 
 ## Data Models
 
-- 命名参数索引：`VarValue` 子类型（现有 `VarParam`、`ValCurrNumNameParam`）承载；x64 侧新增的临时变量沿用 `AnalyzingVars::pending_ils` 机制在 prologue 结束后落地。
-- 参数槽映射：`FnParamInfo::paramOffset`（相对 FP）与 `localOffset` 由新 handler 填写。
+- 参数寄存器顺序：`kCpuRegistersForArgs = {RDI, RSI, RDX, RBX, R8, R9}`（对应 `A64::Register` 索引 `{7,6,2,3,8,9}`）；上下文寄存器 `RDX`。
+- 调用者栈布局：`[fp+0x10]` 为第一个固定参数，`[fp+0x8]` 为返回地址，`[fp]` 为旧 `fp`。
+- ArgumentsDescriptor 偏移（PRODUCT x64，heap tag=值−1）：`count=0x20→0x1f`、`size=0x28`、`positional_count=0x30`、`first_named_entry=0x38→0x37`、`named_entry_size=0x10`、`name_offset=0x0`、`position_offset=0x8`、`type_args_len=0x18`。全部取自 `dart::` 常量。
 
 ## Correctness Properties
 
-- 不变量 1：`FnParams::NumOptionalParam()` 与 `DartFunction::NumOptionalParam()` 在分析完成后一致（对有签名的函数）。
-- 不变量 2：命名参数名称匹配顺序与 `FunctionType` 的字典序一致。
-- 不变量 3：无可选/命名参数的函数不进入新 handler 的主体分支，IL 与产物不变。
-- 不变量 4：新 handler 失败时回滚 `AsmIterator`（沿用 `INSN_ASSERT` 的自动回滚语义）并返回，不产生半登记参数。
-- 不变量 5：所有 ArgumentsDescriptor 偏移取自 `dart::` 常量，两架构共用同一来源。
+1. 检测到的固定参数不少于改动前（对 8896 个函数逐地址对比：0 退化、381 个函数识别出更多参数、25 个函数新增命名参数）。
+2. 未检测到的槽不产生参数条目，`SetupParameters` 不带伪 `valReg` 标注。
+3. 无签名（混淆）函数不补 name/type，输出保持 `dynamic _`。
+4. `FnParams::numFixedParam` 等于实际登记的固定参数个数；命名参数只在检测到 `{...}` 时置 `isNamedParam`。
+5. 分析失败只回滚当前模式，不登记半成品参数。
 
 ## Error Handling
 
-- prologue 模式不匹配：`INSN_ASSERT` 触发回滚，`handleOptionalNamedParameters` 返回，主循环继续处理后续指令。
-- ArgumentsDescriptor 未加载或值为空：跳过可选/命名参数扫描，退回固定参数结果。
-- 参数个数与 ArgumentsDescriptor 不一致：以 ArgumentsDescriptor 为准并输出一次 stderr 警告。
-- 未识别的 x64 寻址形式：记录为未知模式，不登记参数，不中断。
+- prologue 模式不匹配：`try*` 返回 `false`，`AsmIterator` 由 `InsnMarker` 回滚，主循环继续。
+- ArgumentsDescriptor 未加载：跳过可选/命名扫描，保留固定参数结果。
+- 未知寻址形态：不登记参数，不中断分析。
 
 ## Test Strategy
 
-- 语法：优先完成完整 x64 构建（`scripts/build.py build-dartvm --arch x86_64` + `build-blutter --arch x86_64`）。
-- 功能：对 Flutter Windows 桌面样本 `app.so` 运行，抽样含可选/命名参数的函数，核对 `asm/*.dart` 中参数名、`arg_i` 绑定与调用点参数个数。
-- 对照：同一逻辑函数在 arm64 样本上的输出作为对照，检查结构一致。
-- 无退化：无 `-p` 与有 `-p` 情况下，未含可选/命名参数的函数产物与基线逐字节一致。
+```bash
+# 重新构建 x64 分析器
+cd /workspace/build/blutter_dartvm3.12.2_windows_x64
+ninja
+
+# 分析 Windows x64 样本
+cd /workspace
+./build/blutter_dartvm3.12.2_windows_x64/blutter_dartvm3.12.2_windows_x64 \
+  -i /tmp/opencode/samples/extracted/so_real/app.so \
+  -o /tmp/opencode/samples/out_new
+```
+
+- 逐函数对比 `out_real`（基线）与 `out_new` 的 `SetupParameters` 参数个数，要求零退化。
+- 校验参数个数与函数签名一致（闭包中未在 prologue 使用、仅存在于签名的参数允许缺省）。
+- 校验每个命名参数名称都能在同一输出文件的 PP 字符串表中找到。
+- 已知遗留：分析器对 `MOVSXD` 的 `processLoadStore` 匹配缺口会产生 `condition not matched` 日志（4492 行），与参数识别无关，不影响 exit code。
 
 ## References
 
-[^1]: (blutter/src/CodeAnalyzer_x64.cpp#L17-L25) - `TODO(gap-4)` 原始描述
-[^2]: (blutter/src/CodeAnalyzer_x64.cpp#L1627-L1642) - 占位 `handleOptionalNamedParameters`
-[^3]: (blutter/src/CodeAnalyzer_x64.cpp#L1273) - `processFrameParameterLoad`
-[^4]: (blutter/src/CodeAnalyzer_arm64.cpp#L954) - `handleFixedParameters`
-[^5]: (blutter/src/CodeAnalyzer_arm64.cpp#L1149-L1565) - `handleOptionalNamedParameters`
-[^6]: (blutter/src/CodeAnalyzer.h#L96-L140) - `FnParams` / `AnalyzingState` / `AnalyzingVars`
-[^7]: (.monkeycode/specs/2026-10-06-x64-analyzer-parity/requirements.md) - 本功能需求文档
+[^1]: (blutter/src/CodeAnalyzer_x64.cpp) - `ParamScanCtx`、`collectPrologueParameters`、`tryFixedParameter`、`tryOptionalPositionalParameter`、`tryNamedParameter`、`processPrologueParametersInstr`
+[^2]: (blutter/src/CodeAnalyzer_arm64.cpp#L954-L1565) - arm64 固定/可选/命名参数蓝本
+[^3]: (blutter/src/CodeAnalyzer.h#L70-L140) - `FnParamInfo` / `FnParams`
+[^4]: (blutter/src/DartFunction.h#L18-L39) - `DartFunctionSignature`
+[^5]: (/workspace/dartsdk/v3.12.2/runtime/vm/constants_x64.h) - x64 参数寄存器与 TAG 常量
+[^6]: (.monkeycode/specs/2026-10-06-x64-analyzer-parity/requirements.md) - 本功能需求文档
