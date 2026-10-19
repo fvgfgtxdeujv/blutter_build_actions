@@ -270,7 +270,14 @@ static VarValue* getPoolObject(DartApp& app, intptr_t offset, A64::Register dstR
 		return new VarInteger(imm, VarValue::NativeInt);
 	}
 	else if (objType == dart::ObjectPool::EntryType::kNativeFunction) {
-		throw std::runtime_error("getting native function pool object from Dart code");
+		// Dart 3.13: the object pool may contain kNativeFunction entries (@Native / FFI targets).
+		// Upstream throws std::runtime_error here, but nothing catches it, aborting the whole
+		// analysis (and thus the packaging). Degrade to a placeholder: treat the native function
+		// pointer like an immediate integer value.
+		auto raw = pool.RawValueAt(idx);
+		if (dstReg.IsDecimal())
+			return new VarDouble(*((double*)&raw), VarType::NativeDouble);
+		return new VarInteger(raw, VarValue::NativeInt);
 	}
 	else {
 		throw std::runtime_error(std::format("unknown pool object type: {}", (int)objType).c_str());

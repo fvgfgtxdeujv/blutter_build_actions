@@ -14,6 +14,7 @@ import zipfile
 import argparse
 import hashlib
 import re
+import ast
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).parent
@@ -354,7 +355,51 @@ def clone_dart_sdk(version):
     print(f"[+] Dart SDK cloned to {clone_dir}")
 
 
-def generate_sources(version):
+def get_vm_snapshot_files(clone_dir):
+    """Return the SDK's canonical VM_SNAPSHOT_FILES (relative to the SDK root).
+
+    MD5 is order-sensitive, so the list must match tools/make_version.py exactly.
+    Parse it instead of hard-coding: the list changes between Dart versions.
+    """
+    fallback = [
+        'runtime/vm/app_snapshot.cc',
+        'runtime/vm/app_snapshot.h',
+        'runtime/vm/dart.cc',
+        'runtime/vm/dart_api_impl.cc',
+        'runtime/vm/datastream.h',
+        'runtime/vm/image_snapshot.cc',
+        'runtime/vm/image_snapshot.h',
+        'runtime/vm/object.cc',
+        'runtime/vm/object.h',
+        'runtime/vm/raw_object.cc',
+        'runtime/vm/raw_object.h',
+        'runtime/vm/snapshot.cc',
+        'runtime/vm/snapshot.h',
+        'runtime/vm/symbols.cc',
+        'runtime/vm/symbols.h',
+    ]
+    script = clone_dir / "tools" / "make_version.py"
+    if not script.is_file():
+        return fallback, False
+    try:
+        tree = ast.parse(script.read_text())
+    except (OSError, SyntaxError):
+        return fallback, False
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(isinstance(t, ast.Name) and t.id == "VM_SNAPSHOT_FILES" for t in node.targets):
+            continue
+        try:
+            files = ast.literal_eval(node.value)
+        except ValueError:
+            return fallback, False
+        if files and all(isinstance(f, str) for f in files):
+            return [f"runtime/vm/{f}" for f in files], True
+    return fallback, False
+
+
+def generate_sources(version, app_snapshot_hash=None):
     """Generate sourcelist.cmake and detect C++ standard"""
     print("[*] Generating source list...")
     clone_dir = SDK_DIR / f"v{version}"
@@ -385,23 +430,17 @@ def generate_sources(version):
     # VM_SNAPSHOT_FILES in tools/make_version.py (alphabetical); MD5 is
     # order-sensitive, so a different order produces a hash the VM rejects.
     print("[*] Computing snapshot hash...")
-    snapshot_files = [
-        'runtime/vm/app_snapshot.cc',
-        'runtime/vm/app_snapshot.h',
-        'runtime/vm/dart.cc',
-        'runtime/vm/dart_api_impl.cc',
-        'runtime/vm/datastream.h',
-        'runtime/vm/image_snapshot.cc',
-        'runtime/vm/image_snapshot.h',
-        'runtime/vm/object.cc',
-        'runtime/vm/object.h',
-        'runtime/vm/raw_object.cc',
-        'runtime/vm/raw_object.h',
-        'runtime/vm/snapshot.cc',
-        'runtime/vm/snapshot.h',
-        'runtime/vm/symbols.cc',
-        'runtime/vm/symbols.h',
-    ]
+    snapshot_files, parsed = get_vm_snapshot_files(clone_dir)
+    if not parsed:
+        print("[!] Warning: VM_SNAPSHOT_FILES not found in tools/make_version.py, "
+              "using the built-in list")
+    missing = [p for p in snapshot_files if not (clone_dir / p).is_file()]
+    if missing:
+        msg = ("[!] Warning: snapshot hash source files are missing (the hash will be wrong): "
+               + ", ".join(missing))
+        if app_snapshot_hash:
+            raise SystemExit(msg)
+        print(msg)
     vmhash = hashlib.md5()
     for relpath in snapshot_files:
         fpath = clone_dir / relpath
@@ -410,6 +449,23 @@ def generate_sources(version):
                 vmhash.update(f.read())
     snapshot_hash = vmhash.hexdigest()
     print(f"[+] Snapshot hash: {snapshot_hash}")
+
+    if app_snapshot_hash:
+        # The app embeds the hash of the Dart sources it was compiled with. A
+        # mismatch means this SDK checkout is a different revision: the VM will
+        # reject the snapshot (or crash while deserializing it), so fail before
+        # spending time on a full libdart build.
+        app_hash = app_snapshot_hash.strip().lower()
+        if app_hash != snapshot_hash:
+            raise SystemExit(
+                "\n[!] Snapshot hash mismatch:\n"
+                f"    libapp.so:      {app_hash}\n"
+                f"    Dart {version}: {snapshot_hash}\n"
+                "The app was built with different Dart VM sources; the generated VM "
+                "cannot load its snapshots.\n"
+                "Use the Dart version/revision matching the app, or pass the matching "
+                "--app-snapshot-hash.")
+        print("[+] Snapshot hash matches libapp.so")
 
     version_cc = clone_dir / "runtime" / "vm" / "version.cc"
     if version_cc.exists():
@@ -587,6 +643,9 @@ def main():
     p.add_argument("version")
     p = sub.add_parser("generate-sources")
     p.add_argument("version")
+    p.add_argument("--app-snapshot-hash", default=None,
+                   help="Snapshot hash embedded in libapp.so; fail early if it differs from "
+                        "the hash computed from the Dart SDK sources")
     p = sub.add_parser("build-dartvm")
     p.add_argument("version")
     p.add_argument("--arch", choices=["aarch64", "x86_64", "windows_x64"], default="aarch64")
@@ -612,7 +671,7 @@ def main():
         else:
             print(f"[=] Dart SDK {args.version} already cloned")
     elif args.command == "generate-sources":
-        generate_sources(args.version)
+        generate_sources(args.version, app_snapshot_hash=args.app_snapshot_hash)
     elif args.command == "build-dartvm":
         compressed_ptrs = False if args.no_compressed_ptrs else None
         build_dart_runtime(args.version, args.arch, compressed_ptrs=compressed_ptrs)
