@@ -715,7 +715,8 @@ std::unique_ptr<BoxInt64Instr> FunctionAnalyzer::processBoxInt64Instr(AsmIterato
 		in_reg = A64::Register{ insn.ops(1).reg };
 		++insn;
 		if (!(insn.id() == X86_INS_ADD && insn.op_count() == 2 && IsX86Reg(insn.ops(0)) && IsX86Reg(insn.ops(1)) &&
-			insn.ops(0).size == 8 && insn.ops(0).reg == out_reg && insn.ops(1).reg == out_reg))
+			insn.ops(0).size == 8 && A64::Register{ insn.ops(0).reg } == out_reg &&
+			A64::Register{ insn.ops(1).reg } == out_reg))
 			return nullptr;
 		++insn;
 	}
@@ -735,28 +736,58 @@ std::unique_ptr<BoxInt64Instr> FunctionAnalyzer::processBoxInt64Instr(AsmIterato
 		INSN_ASSERT(stubKind == DartStub::AllocateMintSharedWithoutFPURegsStub || stubKind == DartStub::AllocateMintSharedWithFPURegsStub);
 	};
 
+	// Dart 3.5+ may enter a frame just for the stub call (the stub clobbers
+	// callee-saved registers).  Mirror the arm64 matcher and consume it when
+	// present.
+	bool doEnterFrame = false;
+	if (insn.id() == X86_INS_PUSH && insn.op_count() == 1 && IsX86Reg(insn.ops(0)) &&
+		insn.ops(0).reg == X86_REG_RBP) {
+		++insn;
+		if (!(insn.id() == X86_INS_MOV && insn.op_count() == 2 && IsX86Reg(insn.ops(0)) && IsX86Reg(insn.ops(1)) &&
+			insn.ops(0).reg == X86_REG_RBP && insn.ops(1).reg == X86_REG_RSP))
+			return nullptr;
+		++insn;
+		doEnterFrame = true;
+	}
+
 	if (insn.id() == X86_INS_CALL && insn.op_count() == 1 && IsX86Imm(insn.ops(0))) {
 		assertAllocateMintStub(app.GetFunction(insn.ops(0).imm));
 		setAsmTextDataCall(insn.address(), (uint64_t)insn.ops(0).imm);
 		++insn;
 	}
 	else {
-		// pool loaded stub call: load CODE then call [CODE + entry_point]
+		// pool loaded stub call: load the Code object into CODE_REG or TMP,
+		// then call [reg + entry_point].
 		const auto objPoolInstr = getObjectPoolInstruction(insn);
 		INSN_ASSERT(objPoolInstr.IsSet());
-		INSN_ASSERT(objPoolInstr.dstReg == A64::Register{ dart::CODE_REG });
+		INSN_ASSERT(objPoolInstr.dstReg == A64::Register{ dart::CODE_REG } ||
+			objPoolInstr.dstReg == A64::Register{ dart::TMP });
 		INSN_ASSERT(objPoolInstr.item.ValueTypeId() == dart::kFunctionCid);
 		assertAllocateMintStub(&objPoolInstr.item.Get<VarFunctionCode>()->fn);
 
-		INSN_ASSERT(insn.id() == X86_INS_CALL && insn.op_count() == 1 && IsX86Mem(insn.ops(0)));
+		INSN_ASSERT(insn.id() == X86_INS_CALL && insn.op_count() == 1 && IsX86Mem(insn.ops(0)) &&
+			A64::Register{ (x86_reg)insn.ops(0).mem.base } == objPoolInstr.dstReg &&
+			insn.ops(0).mem.disp == AOT_Code_entry_point_offset[(int)dart::CodeEntryKind::kNormal] - dart::kHeapObjectTag);
+		++insn;
+	}
+
+	if (doEnterFrame) {
+		// LeaveFrame: mov SP, FP ; pop FP
+		if (!(insn.id() == X86_INS_MOV && insn.op_count() == 2 && IsX86Reg(insn.ops(0)) && IsX86Reg(insn.ops(1)) &&
+			insn.ops(0).reg == X86_REG_RSP && insn.ops(1).reg == X86_REG_RBP))
+			return nullptr;
+		++insn;
+		if (!(insn.id() == X86_INS_POP && insn.op_count() == 1 && IsX86Reg(insn.ops(0)) &&
+			insn.ops(0).reg == X86_REG_RBP))
+			return nullptr;
 		++insn;
 	}
 
 	if (!(insn.id() == X86_INS_MOV && insn.op_count() == 2 && IsX86Mem(insn.ops(0)) && IsX86Reg(insn.ops(1)) &&
-		insn.ops(1).reg == in_reg))
+		A64::Register{ insn.ops(1).reg } == in_reg))
 		return nullptr;
 	const auto& store_mem = insn.ops(0).mem;
-	if (!((x86_reg)store_mem.base == out_reg && store_mem.disp == dart::Mint::value_offset() - dart::kHeapObjectTag))
+	if (!(A64::Register{ (x86_reg)store_mem.base } == out_reg && store_mem.disp == dart::Mint::value_offset() - dart::kHeapObjectTag))
 		return nullptr;
 	++insn;
 
@@ -785,12 +816,17 @@ std::unique_ptr<LoadInt32Instr> FunctionAnalyzer::processLoadInt32FromBoxOrSmiIn
 			const auto cont_addr = insn.BranchTarget();
 			++insn;
 
-			INSN_ASSERT(insn.id() == X86_INS_MOVSXD && insn.op_count() == 2 && IsX86Reg(insn.ops(0)) && IsX86Mem(insn.ops(1)));
-			INSN_ASSERT(insn.ops(0).reg == out_reg);
+			// LoadInt32FromBoxOrSmi emits movsxd (32-bit value), while
+			// LoadInt64FromBoxOrSmi emits a plain 64-bit mov; both use the
+			// doubled address below.
+			INSN_ASSERT((insn.id() == X86_INS_MOVSXD || insn.id() == X86_INS_MOV) &&
+				insn.op_count() == 2 && IsX86Reg(insn.ops(0)) && IsX86Mem(insn.ops(1)));
+			INSN_ASSERT(A64::Register{ insn.ops(0).reg } == out_reg);
 			const auto& mem = insn.ops(1).mem;
-			// [out + out + mint_value_offset - tag]  (untagged value * 2)
-			INSN_ASSERT((x86_reg)mem.base == out_reg && (x86_reg)mem.index == out_reg && mem.scale == 1 &&
-				mem.disp == dart::Mint::value_offset() - dart::kHeapObjectTag);
+			// [out + out + mint_value_offset]: after sar the register holds
+			// ptr/2, so doubling it yields the untagged object pointer.
+			INSN_ASSERT(A64::Register{ (x86_reg)mem.base } == out_reg && A64::Register{ (x86_reg)mem.index } == out_reg && mem.scale == 1 &&
+				mem.disp == dart::Mint::value_offset());
 			++insn;
 
 			INSN_ASSERT(insn.address() == cont_addr);
@@ -1403,7 +1439,7 @@ std::unique_ptr<ILInstr> FunctionAnalyzer::processLoadStore(AsmIterator& insn)
 				if (!arrayOp.IsArrayOp())
 					return nullptr;
 				const auto& load_mem = insn.ops(1).mem;
-				if (!((x86_reg)load_mem.base == tmpReg))
+				if (!(A64::Register{ (x86_reg)load_mem.base } == tmpReg))
 					return nullptr;
 				const auto op0Reg = A64::Register{ insn.ops(0).reg };
 				++insn;
@@ -1414,7 +1450,7 @@ std::unique_ptr<ILInstr> FunctionAnalyzer::processLoadStore(AsmIterator& insn)
 				if (!arrayOp.IsArrayOp())
 					return nullptr;
 				const auto& store_mem = insn.ops(0).mem;
-				if (!((x86_reg)store_mem.base == tmpReg))
+				if (!(A64::Register{ (x86_reg)store_mem.base } == tmpReg))
 					return nullptr;
 				const auto valReg = A64::Register{ insn.ops(1).reg };
 				++insn;
