@@ -13,6 +13,7 @@ import tempfile
 import zipfile
 import argparse
 import hashlib
+import re
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).parent
@@ -64,6 +65,18 @@ def _cmake_launcher_args():
         "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
         "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
     ]
+
+
+def _inject_atomic_ref_shim(env):
+    """Force-include the std::atomic_ref backfill header for libc++ 16.
+
+    libc++ 16 lacks std::atomic_ref, which the Dart VM headers use. The shim is
+    a no-op when the standard library already provides std::atomic_ref. Applied
+    to both the dartvm and blutter builds so they share one standard library."""
+    shim = PROJECT_DIR / "scripts" / "atomic_ref_shim.h"
+    if shim.exists():
+        flags = env.get("CXXFLAGS", "")
+        env["CXXFLAGS"] = f"{flags} -include {shim}".strip()
 
 
 def run(cmd, **kwargs):
@@ -173,6 +186,33 @@ def patch_icu_compat(version):
             print(f"    {f}")
     else:
         print("[=] No ICU patches needed")
+
+
+def patch_libcpp_compat(version):
+    """Patch Dart SDK source for libc++ (LLVM 16) compatibility.
+
+    libc++'s std::array<T, 0> specialization stores an uninitialized char buffer,
+    so returning a default-initialized zero-sized std::array from a constexpr /
+    consteval function is not a constant expression (GCC/libstdc++ accepts it).
+    Value-initializing the array fixes the constexpr evaluation. This is only
+    needed when building the runtime with libc++ (e.g. clang + -stdlib=libc++)."""
+    clone_dir = SDK_DIR / f"v{version}"
+    filepath = clone_dir / "runtime/vm/regexp/regexp-bytecodes-inl.h"
+    old = "  std::array<std::string_view, N> result;\n"
+    new = "  std::array<std::string_view, N> result{};\n"
+    try:
+        content = filepath.read_text()
+    except (UnicodeDecodeError, OSError):
+        print("[=] No libc++ patches needed")
+        return
+    if new in content:
+        print("[=] libc++ compat already applied")
+        return
+    if old in content:
+        filepath.write_text(content.replace(old, new, 1))
+        print("[+] Patched libc++ compat: runtime/vm/regexp/regexp-bytecodes-inl.h")
+    else:
+        print("[=] No libc++ patches needed")
 
 
 def patch_unwinding_records_win(version, clone_dir):
@@ -341,23 +381,26 @@ def generate_sources(version):
     # Patch version.cc with the correct snapshot hash (MD5 of VM source files).
     # This is required for AOT snapshot compatibility. Without it the VM
     # rejects snapshots built from the same source because the hash differs.
+    # The file list and its order MUST match Dart's canonical
+    # VM_SNAPSHOT_FILES in tools/make_version.py (alphabetical); MD5 is
+    # order-sensitive, so a different order produces a hash the VM rejects.
     print("[*] Computing snapshot hash...")
     snapshot_files = [
-        'runtime/vm/app_snapshot.h',
-        'runtime/vm/datastream.h',
-        'runtime/vm/image_snapshot.h',
-        'runtime/vm/object.h',
-        'runtime/vm/raw_object.h',
-        'runtime/vm/snapshot.h',
-        'runtime/vm/symbols.h',
         'runtime/vm/app_snapshot.cc',
+        'runtime/vm/app_snapshot.h',
         'runtime/vm/dart.cc',
         'runtime/vm/dart_api_impl.cc',
+        'runtime/vm/datastream.h',
         'runtime/vm/image_snapshot.cc',
+        'runtime/vm/image_snapshot.h',
         'runtime/vm/object.cc',
+        'runtime/vm/object.h',
         'runtime/vm/raw_object.cc',
+        'runtime/vm/raw_object.h',
         'runtime/vm/snapshot.cc',
+        'runtime/vm/snapshot.h',
         'runtime/vm/symbols.cc',
+        'runtime/vm/symbols.h',
     ]
     vmhash = hashlib.md5()
     for relpath in snapshot_files:
@@ -371,7 +414,14 @@ def generate_sources(version):
     version_cc = clone_dir / "runtime" / "vm" / "version.cc"
     if version_cc.exists():
         content = version_cc.read_text()
-        content = content.replace("{{SNAPSHOT_HASH}}", snapshot_hash)
+        if "{{SNAPSHOT_HASH}}" in content:
+            content = content.replace("{{SNAPSHOT_HASH}}", snapshot_hash)
+        else:
+            # Re-runs: version.cc was already substituted, so update the
+            # existing hash literal instead of the (now absent) placeholder.
+            content = re.sub(
+                r'(const char\* Version::snapshot_hash_ = ")[0-9a-f]*(";)',
+                lambda m: m.group(1) + snapshot_hash + m.group(2), content)
         version_cc.write_text(content)
         print(f"[+] Patched version.cc with snapshot hash")
 
@@ -409,6 +459,9 @@ def build_dart_runtime(version, arch, compressed_ptrs=None):
     dart_lib_name = _dart_lib_name(version, arch)
     build_path = BUILD_DIR / dart_lib_name
 
+    # libc++ (LLVM 16) compatibility patches for constexpr std::array<T, 0>.
+    patch_libcpp_compat(version)
+
     build_path.mkdir(parents=True, exist_ok=True)
 
     cmake_args = [
@@ -423,6 +476,7 @@ def build_dart_runtime(version, arch, compressed_ptrs=None):
     cmake_args += _cmake_launcher_args()
 
     env = os.environ.copy()
+    _inject_atomic_ref_shim(env)
 
     if cross:
         tc_file = PROJECT_DIR / "cross" / "aarch64-toolchain.cmake"
@@ -501,6 +555,7 @@ def build_blutter_binary(version, arch, macros, no_analysis=False, no_compressed
     cmake_args += _cmake_launcher_args()
 
     env = os.environ.copy()
+    _inject_atomic_ref_shim(env)
 
     if cross:
         tc_file = PROJECT_DIR / "cross" / "aarch64-toolchain.cmake"
