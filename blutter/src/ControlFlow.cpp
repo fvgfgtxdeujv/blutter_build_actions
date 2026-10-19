@@ -382,7 +382,8 @@ Cfg Build(const std::vector<AsmText>& asmTexts, const BuildOptions& opts)
 		return entry[v] <= entry[u] && exit_[v] >= exit_[u] && v != u;
 	};
 
-	std::set<int> loopHeaders;
+	// header block index -> ordinal in cfg.loops (indices are NOT the same)
+	std::unordered_map<int, size_t> loopIndex;
 	for (int u = 0; u < n; u++) {
 		for (auto sa : cfg.blocks[u].succ) {
 			int v = (int)cfg.addrToIdx[sa];
@@ -406,9 +407,9 @@ Cfg Build(const std::vector<AsmText>& asmTexts, const BuildOptions& opts)
 				}
 			}
 			// merge with an existing loop of the same header
-			auto existing = loopHeaders.find(v);
-			if (existing != loopHeaders.end()) {
-				auto& l = cfg.loops[*existing];
+			auto existing = loopIndex.find(v);
+			if (existing != loopIndex.end()) {
+				auto& l = cfg.loops[existing->second];
 				for (int x : body)
 					l.body.push_back(cfg.blocks[x].begin);
 				continue;
@@ -418,7 +419,7 @@ Cfg Build(const std::vector<AsmText>& asmTexts, const BuildOptions& opts)
 			l.tail = cfg.blocks[u].begin;
 			for (int x : body)
 				l.body.push_back(cfg.blocks[x].begin);
-			loopHeaders.insert(v);
+			loopIndex.emplace(v, cfg.loops.size());
 			cfg.loops.push_back(std::move(l));
 		}
 	}
