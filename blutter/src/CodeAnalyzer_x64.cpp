@@ -3,6 +3,7 @@
 #include "DartApp.h"
 #include "VarValue.h"
 #include "DartThreadInfo.h"
+#include "ClosureLayout.h"
 #include <source_location>
 #include <unordered_set>
 
@@ -322,6 +323,7 @@ public:
 	bool tryNamedParameter(AsmIterator& insn, ParamScanCtx& ctx);
 	void handleArgumentsDescriptorTypeArguments(AsmIterator& insn);
 	std::unique_ptr<SetupParametersInstr> processPrologueParametersInstr(AsmIterator& insn, uint64_t endPrologueAddr);
+	void recordClosureContextOffset(AsmIterator begin);
 	StoreLocalResult handleStoreLocal(AsmIterator& insn, A64::Register expectedSrcReg = A64::Register{});
 
 	// matchers
@@ -2009,8 +2011,88 @@ std::unique_ptr<SetupParametersInstr> FunctionAnalyzer::processPrologueParameter
 	return std::make_unique<SetupParametersInstr>(insn.Wrap(marker.Take()), &fnInfo->params);
 }
 
+// The x64 IL layer does not model closure contexts yet, so captured variables
+// cannot be resolved. The prologue load that fetches the context is still
+// unambiguous, and Frida needs its offset for every closure:
+//   mov  closure, [fp + slot]        ; closure argument (rdi, or a stack copy)
+//   mov  ctx,     [closure + <ctx>]  ; context field (fixed offset on <=3.12)
+//   mov  x,       [ctx + <field>]    ; captured variable, or a spill of ctx
+// The third instruction is what makes this a context load instead of an ordinary
+// field read on some parameter. It is looked for a few instructions later because
+// the compiler slips the stack-overflow check in between.
+void FunctionAnalyzer::recordClosureContextOffset(AsmIterator begin)
+{
+#ifdef BLUTTER_DART_SINGLE_SNAPSHOT
+	// Dart 3.13 inlines the context into a variable-length elements[] region, so a
+	// prologue offset only means something once the analyzer knows which element a
+	// load refers to. The x64 IL layer models no closure contexts, so every guess
+	// would risk reporting a wrong element index; keep the explicit unknown marker.
+	(void)begin;
+#else
+	// The context sits at a fixed offset on <=3.12, so a match is always the right
+	// value even if the register traced back to a parameter instead of the closure.
+	const int64_t contextDisp = AOT_Closure_context_offset - dart::kHeapObjectTag;
+
+	// rdi always carries the first argument, which for a closure is the closure
+	// itself; other registers become candidates once filled from a stack slot.
+	std::array<bool, X86_REG_ENDING> holdsClosure{};
+	holdsClosure[X86_REG_RDI] = true;
+
+	AsmIterator it = begin;
+	for (int budget = 24; budget > 0 && !it.IsEnd(); --budget, ++it) {
+		const auto id = it.id();
+		if (id == 0 || id == X86_INS_CALL || id == X86_INS_RET || id == X86_INS_JMP || it.IsJcc())
+			break;
+		if (id != X86_INS_MOV || it.op_count() != 2)
+			continue;
+
+		const auto& dst = it.ops(0);
+		const auto& src = it.ops(1);
+		if (!IsX86Reg(dst) || !IsX86Mem(src) || src.mem.index != X86_REG_INVALID)
+			continue;
+		const int dstReg = (int)dst.reg;
+		const int baseReg = (int)src.mem.base;
+		if (dstReg < 0 || dstReg >= X86_REG_ENDING || baseReg < 0 || baseReg >= X86_REG_ENDING)
+			continue;
+
+		if (holdsClosure[baseReg] && src.mem.disp == contextDisp) {
+			// The loaded value has to be consumed as a context soon after; allow a
+			// few instructions for the stack-overflow check the compiler inserts
+			// between the load and the first captured-variable access.
+			AsmIterator next = it;
+			for (int look = 0; look < 4 && !next.IsEnd(); look++) {
+				++next;
+				bool used = false;
+				for (int i = 0; i < (int)next.op_count(); i++) {
+					const auto& op = next.ops(i);
+					used |= IsX86Mem(op) && (int)op.mem.base == dstReg;
+				}
+				// ... or spilled to a local slot for later use
+				if (!used && next.id() == X86_INS_MOV && next.op_count() == 2 &&
+					IsX86Mem(next.ops(0)) && IsCsDartFp((x86_reg)next.ops(0).mem.base) &&
+					next.ops(0).mem.disp < 0 && IsX86Reg(next.ops(1)) && (int)next.ops(1).reg == dstReg)
+					used = true;
+				if (used) {
+					dartFn->SetClosureContextOffset(src.mem.disp + dart::kHeapObjectTag);
+					return;
+				}
+				// a conditional jump (stack-overflow check) is expected here, a call
+				// or return is not: the context is not used after them
+				if (next.id() == X86_INS_CALL || next.id() == X86_INS_RET || next.id() == X86_INS_JMP)
+					break;
+			}
+		}
+		// frameless closures read the closure from [rsp + slot] instead of [fp]
+		if (IsCsDartFp((x86_reg)src.mem.base) || (x86_reg)src.mem.base == X86_REG_RSP)
+			holdsClosure[dstReg] = true;
+	}
+#endif
+}
+
 void FunctionAnalyzer::handlePrologue(AsmIterator& insn, uint64_t endPrologueAddr)
 {
+	if (dartFn->IsClosure())
+		recordClosureContextOffset(insn);
 	{
 		auto ilEnter = processEnterFrameInstr(insn);
 		if (!ilEnter) {
