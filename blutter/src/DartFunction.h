@@ -118,6 +118,10 @@ public:
 	// Whether the closure function declares its own type parameters (Dart 3.13: these
 	// occupy the first closure element, ahead of the context).
 	bool IsGeneric() const  { return is_generic; }
+	// Untagged byte offset of the closure's context field, recovered by the prologue
+	// analyzer; -1 when unknown (e.g. a closure without captured variables).
+	int64_t ClosureContextOffset() const { return closure_context_offset; }
+	void SetClosureContextOffset(int64_t offset) { closure_context_offset = offset; }
 	bool IsFfi() const      { return is_ffi; }
 	bool IsStatic() const   { return is_static; }
 	bool IsConst() const    { return is_const; }
@@ -157,6 +161,7 @@ private:
 	bool is_native;
 	bool is_closure;
 	bool is_generic;
+	int64_t closure_context_offset{ -1 };
 	bool is_ffi; // if a function is FFI, no use of is_static, is_const, is_abstract
 	bool is_static;
 	bool is_const;

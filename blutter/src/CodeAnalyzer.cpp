@@ -9,9 +9,11 @@ AnalyzedFnData::AnalyzedFnData(DartApp& app, DartFunction& dartFn, AsmTexts asmT
 {
 }
 
-void CodeAnalyzer::AnalyzeAll()
+void CodeAnalyzer::AnalyzeAll(bool strict)
 {
 	Disassembler disasmer;
+	size_t analyzed = 0;
+	size_t failed = 0;
 
 	// nativeLib collects functions whose Code object owner is a Smi
 	// (obfuscated apps). It is not part of app.libs, so process it explicitly.
@@ -35,11 +37,23 @@ void CodeAnalyzer::AnalyzeAll()
 
 				// start from PayloadAddress or Address?
 				// the assemblies will be deleted after finish analysis because assembly with details consume too much memory
-				auto asm_insns = disasmer.Disasm((uint8_t*)dartFn->MemAddress(), dartFn->Size(), dartFn->Address());
+				try {
+					auto asm_insns = disasmer.Disasm((uint8_t*)dartFn->MemAddress(), dartFn->Size(), dartFn->Address());
 
-				dartFn->SetAnalyzedData(std::make_unique<AnalyzedFnData>(app, *dartFn, convertAsm(asm_insns)));
+					dartFn->SetAnalyzedData(std::make_unique<AnalyzedFnData>(app, *dartFn, convertAsm(asm_insns)));
 
-				asm2il(dartFn, asm_insns);
+					asm2il(dartFn, asm_insns);
+					++analyzed;
+				}
+				catch (std::exception& e) {
+					++failed;
+					if (strict)
+						throw;
+					// Keep whatever partial data was produced: asm texts stay usable and
+					// an unknown instruction is a better dump than a missing function.
+					std::cerr << "[!] analysis failed at " << std::format("{:#x}", dartFn->Address())
+					          << " " << dartFn->FullName() << ": " << e.what() << "\n";
+				}
 			}
 		}
 	};
@@ -47,6 +61,8 @@ void CodeAnalyzer::AnalyzeAll()
 	for (auto lib : app.libs)
 		analyzeLib(lib, false);
 	analyzeLib(app.NativeLib(), true);
+
+	std::cout << "Analyzed " << analyzed << " functions, " << failed << " failed\n";
 }
 
 #endif // NO_CODE_ANALYSIS

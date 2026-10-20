@@ -399,8 +399,66 @@ def get_vm_snapshot_files(clone_dir):
     return fallback, False
 
 
-def generate_sources(version, app_snapshot_hash=None):
+def extract_snapshot_hash(app_path):
+    """Read the Dart snapshot hash embedded in libapp.so / app.so.
+
+    Mirrors the lookup in 定制版blutter.zip's blutter.py: the hash is a 32-byte
+    ASCII MD5 stored 20 bytes past _kDartVmSnapshotData (older versions) or
+    _kDartSnapshotData (Dart 3.13+ merged snapshot). Both symbol tables are
+    scanned because stripped AOT libraries often keep only one.
+    """
+    from elftools.elf.elffile import ELFFile
+    from elftools.common.exceptions import ELFError
+
+    path = Path(app_path)
+    if not path.is_file():
+        raise SystemExit(f"[!] --app file not found: {app_path}")
+    try:
+        with open(path, 'rb') as f:
+            elf = ELFFile(f)
+            sym = None
+            for sec_name in ('.dynsym', '.symtab'):
+                section = elf.get_section_by_name(sec_name)
+                if section is None:
+                    continue
+                for sym_name in ('_kDartVmSnapshotData', '_kDartSnapshotData'):
+                    found = section.get_symbol_by_name(sym_name)
+                    if found:
+                        sym = found[0]
+                        break
+                if sym is not None:
+                    break
+            if sym is None:
+                raise SystemExit(
+                    f"[!] cannot find _kDartVmSnapshotData/_kDartSnapshotData in {app_path}; "
+                    "pass --app-snapshot-hash instead")
+            f.seek(sym['st_value'] + 20)
+            raw = f.read(32)
+    except ELFError as e:
+        raise SystemExit(f"[!] {app_path} is not an ELF file ({e}); pass --app-snapshot-hash instead")
+
+    try:
+        snapshot_hash = raw.decode('ascii')
+    except UnicodeDecodeError:
+        snapshot_hash = ''
+    if len(snapshot_hash) != 32 or any(c not in '0123456789abcdef' for c in snapshot_hash):
+        raise SystemExit(
+            f"[!] unexpected snapshot hash {raw!r} in {app_path}; pass --app-snapshot-hash instead")
+    return snapshot_hash
+
+
+def generate_sources(version, app_snapshot_hash=None, app_path=None):
     """Generate sourcelist.cmake and detect C++ standard"""
+    if app_path:
+        from_app = extract_snapshot_hash(app_path)
+        print(f"[+] Snapshot hash from {app_path}: {from_app}")
+        if app_snapshot_hash and app_snapshot_hash.strip().lower() != from_app:
+            raise SystemExit(
+                "\n[!] --app and --app-snapshot-hash disagree:\n"
+                f"    --app:               {from_app}\n"
+                f"    --app-snapshot-hash: {app_snapshot_hash.strip().lower()}")
+        app_snapshot_hash = from_app
+
     print("[*] Generating source list...")
     clone_dir = SDK_DIR / f"v{version}"
 
@@ -646,6 +704,9 @@ def main():
     p.add_argument("--app-snapshot-hash", default=None,
                    help="Snapshot hash embedded in libapp.so; fail early if it differs from "
                         "the hash computed from the Dart SDK sources")
+    p.add_argument("--app", default=None,
+                   help="libapp.so / app.so to read the snapshot hash from (same check as "
+                        "--app-snapshot-hash, without extracting the hash by hand)")
     p = sub.add_parser("build-dartvm")
     p.add_argument("version")
     p.add_argument("--arch", choices=["aarch64", "x86_64", "windows_x64"], default="aarch64")
@@ -671,7 +732,7 @@ def main():
         else:
             print(f"[=] Dart SDK {args.version} already cloned")
     elif args.command == "generate-sources":
-        generate_sources(args.version, app_snapshot_hash=args.app_snapshot_hash)
+        generate_sources(args.version, app_snapshot_hash=args.app_snapshot_hash, app_path=args.app)
     elif args.command == "build-dartvm":
         compressed_ptrs = False if args.no_compressed_ptrs else None
         build_dart_runtime(args.version, args.arch, compressed_ptrs=compressed_ptrs)

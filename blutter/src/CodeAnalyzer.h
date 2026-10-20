@@ -219,7 +219,10 @@ class CodeAnalyzer
 public:
 	CodeAnalyzer(DartApp& app) : app(app) {};
 
-	void AnalyzeAll();
+	// Analyze every function. Individual failures are logged and skipped so one bad
+	// function cannot abort the whole dump; strict=true keeps the old fail-fast
+	// behaviour for debugging.
+	void AnalyzeAll(bool strict = false);
 
 private:
 	static AsmTexts convertAsm(AsmInstructions& asm_insns);

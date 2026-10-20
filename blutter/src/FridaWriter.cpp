@@ -259,4 +259,25 @@ void FridaWriter::Create(const char* filename)
 		}
 	}
 	of << "];\n";
+
+	// Per-closure context offsets. Dart 3.13 inlines the context into Closure.elements[],
+	// so its offset depends on each function's type-argument flags and cannot be a single
+	// class-level constant. Keyed by the closure entry point relative to the image base,
+	// the same key the templates compute from ep - libapp/imageBase.
+	of << "const ClosureContextOffsets = {\n";
+	{
+		std::vector<const DartFunction*> closures;
+		for (const auto& [addr, fn] : app.functions) {
+			if (fn->IsClosure() && fn->ClosureContextOffset() >= 0)
+				closures.push_back(fn);
+		}
+		std::sort(closures.begin(), closures.end(), [](const DartFunction* a, const DartFunction* b) {
+			return a->Address() < b->Address();
+		});
+		for (const auto* fn : closures) {
+			of << "\t\"" << std::format("{:x}", app.offset(fn->Address())) << "\": "
+			   << fn->ClosureContextOffset() << ",\n";
+		}
+	}
+	of << "};\n";
 }

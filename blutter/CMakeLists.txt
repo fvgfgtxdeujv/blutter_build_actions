@@ -195,3 +195,11 @@ target_compile_options(${BINNAME} PRIVATE ${cc_opts})
 
 cmake_path(SET DST_DIR NORMALIZE "${PROJECT_SOURCE_DIR}/../bin")
 install (TARGETS ${BINNAME} RUNTIME DESTINATION ${DST_DIR})
+
+# Framework-free unit tests (currently the Dart 3.13 closure layout model).
+# They do not need the Dart VM headers, so they build and run on any host.
+include(CTest)
+if (BUILD_TESTING)
+	add_executable(blutter_closure_layout_test tests/test_closure_layout.cpp)
+	add_test(NAME closure_layout COMMAND blutter_closure_layout_test)
+endif()

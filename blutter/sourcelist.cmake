@@ -29,11 +29,14 @@ set(SRCS
     Disassembler.h
     Disassembler_arm64.cpp
     Disassembler_arm64.h
+    ClosureLayout.h
     ElfHelper.cpp
     ElfHelper.h
     FridaWriter.cpp
     FridaWriter.h
     HtArrayIterator.h
+    JsonDumper.cpp
+    JsonDumper.h
     Util.cpp
     Util.h
     VarValue.cpp

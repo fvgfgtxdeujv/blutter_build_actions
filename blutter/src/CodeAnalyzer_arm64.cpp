@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "CodeAnalyzer.h"
+#include "ClosureLayout.h"
 #include "DartApp.h"
 #include "VarValue.h"
 #include "DartThreadInfo.h"
@@ -8,35 +9,35 @@
 
 #ifndef NO_CODE_ANALYSIS
 
-// Dart 3.13 replaced Closure's fixed context / delayed-type-arguments fields with a
-// variable-length elements[] region, laid out as
-//   [delayed type args][instantiator type args][parent function type args][context][captures]
-// The prologue bakes the concrete offset of the analyzed function into the load, so accept any
-// valid element slot: delayed type args always sit at index 0, while the context index equals the
-// number of present type-argument fields (0..3) and is >= 1 whenever the function is generic.
+// The prologue bakes the concrete closure field offset of the analyzed function into the
+// load, so 3.13 matches an element index instead of a single fixed offset.
+// See ClosureLayout.h for the accepted index range.
 static bool isClosureContextDisp(int64_t disp, bool generic)
 {
 #ifdef BLUTTER_DART_SINGLE_SNAPSHOT
-	const int64_t off = disp + dart::kHeapObjectTag;
-	const int64_t start = AOT_Closure_elements_start_offset;
-	const int64_t size = AOT_Closure_element_size;
-	if (off < start || (off - start) % size != 0)
-		return false;
-	const int64_t idx = (off - start) / size;
-	const int64_t minIdx = generic ? 1 : 0;
-	return idx >= minIdx && idx <= 3;
+	const int idx = blutter::closure_layout::ElementIndex(
+		disp + dart::kHeapObjectTag,
+		AOT_Closure_elements_start_offset,
+		AOT_Closure_element_size);
+	return blutter::closure_layout::IsContextElement(idx, generic);
 #else
 	(void)generic;
-	return disp == AOT_Closure_context_offset - dart::kHeapObjectTag;
+	return blutter::closure_layout::IsFixedFieldDisp(
+		disp, AOT_Closure_context_offset, dart::kHeapObjectTag);
 #endif
 }
 
 static bool isClosureDelayedTypeArgsDisp(int64_t disp)
 {
 #ifdef BLUTTER_DART_SINGLE_SNAPSHOT
-	return disp + dart::kHeapObjectTag == AOT_Closure_elements_start_offset;
+	const int idx = blutter::closure_layout::ElementIndex(
+		disp + dart::kHeapObjectTag,
+		AOT_Closure_elements_start_offset,
+		AOT_Closure_element_size);
+	return blutter::closure_layout::IsDelayedTypeArgsElement(idx);
 #else
-	return disp == AOT_Closure_delayed_type_arguments_offset - dart::kHeapObjectTag;
+	return blutter::closure_layout::IsFixedFieldDisp(
+		disp, AOT_Closure_delayed_type_arguments_offset, dart::kHeapObjectTag);
 #endif
 }
 
@@ -432,7 +433,7 @@ FunctionAnalyzer::ObjectPoolInstr FunctionAnalyzer::getObjectPoolInstruction(Asm
 				val = false;
 			}
 			else {
-				FATAL("add from NULL_REG");
+				throw std::runtime_error("add from NULL_REG");
 			}
 			auto b = new VarBoolean(val);
 			setAsmTextDataBoolean(marker.Take(), val);
@@ -1142,7 +1143,7 @@ void FunctionAnalyzer::handleOptionalPositionalParameters(AsmIterator& insn, arm
 				++insn;
 			}
 			else {
-				FATAL("unexpected instruction");
+				throw std::runtime_error("unexpected instruction");
 			}
 		}
 
@@ -2058,6 +2059,9 @@ std::unique_ptr<SetupParametersInstr> FunctionAnalyzer::processPrologueParameter
 	// PrologueBuilder::BuildClosureContextHandling()
 	// closure context handling
 	if (isClosureFn && insn.id() == ARM64_INS_LDUR && isClosureContextDisp(insn.ops(1).mem.disp, closureIsGeneric)) {
+		// Record the concrete context offset for Frida output (it differs per closure
+		// once Dart 3.13 inlines the field into elements[]).
+		dartFn->SetClosureContextOffset(insn.ops(1).mem.disp + dart::kHeapObjectTag);
 		const auto arg1Reg = [&] {
 			if (fnInfo->params.numFixedParam > 0) {
 				return fnInfo->params[0].valReg;
@@ -3086,7 +3090,7 @@ std::unique_ptr<ILInstr> FunctionAnalyzer::processLoadFieldTableInstr(AsmIterato
 		}
 
 		if (insn.id() != ARM64_INS_STR && insn.id() != ARM64_INS_LDR) {
-			FATAL("static field without STR or LDR");
+			throw std::runtime_error("static field without STR or LDR");
 		}
 
 		INSN_ASSERT(insn.ops(1).mem.base == tmp_reg);

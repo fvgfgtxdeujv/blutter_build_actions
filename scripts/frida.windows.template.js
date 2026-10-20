@@ -121,6 +121,22 @@ function getDartClosure(ptr, cls) {
     return `Closure(${fnName})`;
 }
 
+// Context offset of this closure (untagged, per function since Dart 3.13 stores
+// it in Closure.elements[]). Keyed by the entry point relative to imageBase;
+// ClosureContextOffsets is appended by blutter FridaWriter.
+function getClosureContextOffset(ptr, cls) {
+    if (imageBase === null) return -1;
+    let ep = ptr.add(cls.epOffset).readPointer();
+    let off = ClosureContextOffsets[ep.sub(imageBase).toString(16)];
+    return off === undefined ? -1 : off;
+}
+
+function getClosureContext(ptr, cls) {
+    let off = getClosureContextOffset(ptr, cls);
+    if (off < 0) return null;
+    return ptr.add(off).readPointer();
+}
+
 function getDartLinkedHashData(ptr, cls, depthLeft, isMap) {
     const usedData = fmtSmi(smiUntag(wordBigAt(ptr, cls.usedOffset)));
     let arrPtr = ptr.add(cls.dataOffset);

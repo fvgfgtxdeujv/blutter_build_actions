@@ -123,6 +123,23 @@ function getDartClosure(ptr, cls) {
     return `Closure(${fnName})`;
 }
 
+// Context offset of this closure (untagged). Dart 3.13 moved the context into the
+// variable-length Closure.elements[] region, so the value is per function; it is
+// keyed by the closure entry point relative to libapp (ClosureContextOffsets is
+// appended by blutter FridaWriter).
+function getClosureContextOffset(ptr, cls) {
+    if (libapp === null) return -1;
+    let ep = ptr.add(cls.epOffset).readPointer();
+    let off = ClosureContextOffsets[ep.sub(libapp).toString(16)];
+    return off === undefined ? -1 : off;
+}
+
+function getClosureContext(ptr, cls) {
+    let off = getClosureContextOffset(ptr, cls);
+    if (off < 0) return null;
+    return ptr.add(off).readPointer();
+}
+
 function getDartLinkedHashData(ptr, cls, depthLeft, isMap) {
     const usedData = ptr.add(cls.usedOffset).readU32() >> 1;
     let arrPtr = ptr.add(cls.dataOffset);

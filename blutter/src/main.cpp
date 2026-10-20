@@ -3,6 +3,7 @@
 #include "DartDumper.h"
 #include "CodeAnalyzer.h"
 #include "FridaWriter.h"
+#include "JsonDumper.h"
 #include "PseudoCode.h"
 #include "args.hxx"
 #include <filesystem>
@@ -24,6 +25,8 @@ int main(int argc, char** argv)
 	args::Flag pseudo(parser, "pseudo", "also emit pseudo-code comment blocks in asm output (off by default)", { 'p', "pseudo" });
 	args::Flag exception(parser, "exception", "also emit exception try/handler markers in asm output (off by default)", { 'e', "exception" });
 	args::Flag types(parser, "types", "also emit recovered return-type annotations at call sites (off by default)", { 't', "types" });
+	args::Flag json(parser, "json", "also write blutter_dump.json (structured library/class/function export)", { 'j', "json" });
+	args::Flag strict(parser, "strict", "abort on the first function that fails analysis (default: log and continue)", { "strict" });
 
 	try {
 		parser.ParseCLI(argc, argv);
@@ -57,7 +60,7 @@ int main(int argc, char** argv)
 #ifndef NO_CODE_ANALYSIS
 		std::cout << "Analyzing the application\n";
 		CodeAnalyzer analyzer{ app };
-		analyzer.AnalyzeAll();
+		analyzer.AnalyzeAll(static_cast<bool>(strict));
 		// Fill return/parameter types dropped from the snapshot using the IL
 		// analysis result (opt-in output stays behind -t/--types).
 		app.BackfillSignaturesFromAnalysis();
@@ -67,6 +70,11 @@ int main(int argc, char** argv)
 		std::cout << "Dumping Object Pool\n";
 		dumper.DumpObjectPool((outDir / "pp.txt").string().c_str());
 		dumper.DumpObjects((outDir / "objs.txt").string().c_str());
+		if (json) {
+			std::cout << "Writing JSON dump\n";
+			JsonDumper jsonDumper{ app };
+			jsonDumper.Write((outDir / "blutter_dump.json").string().c_str());
+		}
 #ifndef NO_CODE_ANALYSIS
 		std::cout << "Generating application assemblies\n";
 #else
