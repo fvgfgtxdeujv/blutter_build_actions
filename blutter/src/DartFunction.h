@@ -115,6 +115,9 @@ public:
 
 	bool IsNative() const   { return is_native; }
 	bool IsClosure() const  { return is_closure; }
+	// Whether the closure function declares its own type parameters (Dart 3.13: these
+	// occupy the first closure element, ahead of the context).
+	bool IsGeneric() const  { return is_generic; }
 	bool IsFfi() const      { return is_ffi; }
 	bool IsStatic() const   { return is_static; }
 	bool IsConst() const    { return is_const; }
@@ -153,6 +156,7 @@ private:
 	FunctionKind kind;
 	bool is_native;
 	bool is_closure;
+	bool is_generic;
 	bool is_ffi; // if a function is FFI, no use of is_static, is_const, is_abstract
 	bool is_static;
 	bool is_const;

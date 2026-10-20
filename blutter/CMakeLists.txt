@@ -91,6 +91,20 @@ add_executable(${BINNAME} ${SRCS})
 
 target_link_libraries(${BINNAME} PRIVATE ${DARTLIB} capstone)
 
+if (MSVC)
+	# Dart 3.13's regexp code references ICU (UnicodeSet/UnicodeString and the u_* property
+	# APIs). The Dart VM static lib is linked against external/icu-windows (ICU 73), while
+	# find_package(ICU) may resolve to the Windows SDK copy, whose symbols do not match, so
+	# link the bundled ICU 73 import libraries here as well.
+	set(BLUTTER_ICU_LIB_DIR "${PROJECT_SOURCE_DIR}/../external/icu-windows/lib64")
+	if (EXISTS "${BLUTTER_ICU_LIB_DIR}/icuuc.lib")
+		target_link_libraries(${BINNAME} PRIVATE
+			"${BLUTTER_ICU_LIB_DIR}/icuuc.lib"
+			"${BLUTTER_ICU_LIB_DIR}/icuin.lib"
+			"${BLUTTER_ICU_LIB_DIR}/icudt.lib")
+	endif()
+endif()
+
 target_precompile_headers(${BINNAME} PRIVATE "${SRCDIR}/pch.h")
 
 if (MSVC)
@@ -101,14 +115,17 @@ if (MSVC)
 	# remove compiler RTTI option
 	string(REPLACE "/GR" "" CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
 	#set(cc_opts /Oy /GR- /EHs-c-)
+	# Dart 3.11+ headers use __VA_OPT__, which needs the conforming preprocessor,
+	# and the Dart sources are UTF-8.
+	set(msvc_dart_flags /Zc:preprocessor /utf-8)
 	if (CMAKE_GENERATOR MATCHES "Visual Studio")
 		# use SEMIDBG for enabling ASSERT macro while linking against release build of Dart VM
-		set(cc_opts /GR- /MD /D SEMIDBG)
+		set(cc_opts /GR- /MD /D SEMIDBG ${msvc_dart_flags})
 		set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT ${BINNAME})
 		set_target_properties(${BINNAME} PROPERTIES VS_DEBUGGER_COMMAND_ARGUMENTS "${DBG_CMD}")
 	else()
 		# assume Ninja
-		set(cc_opts /Oy /GR- /sdl- /Oi /GL /Gy /Zc:wchar_t /Zc:inline)
+		set(cc_opts /Oy /GR- /sdl- /Oi /GL /Gy /Zc:wchar_t /Zc:inline ${msvc_dart_flags})
 		target_link_options(${BINNAME} PRIVATE /LTCG /OPT:REF /OPT:ICF)
 	endif()
 else()

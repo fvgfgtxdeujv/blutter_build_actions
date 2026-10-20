@@ -106,7 +106,8 @@ static void ExtractExceptionTable(DartExceptionTable& out,
 	}
 }
 
-DartFunction::DartFunction(DartClass& cls, const dart::FunctionPtr ptr) : DartFnBase(), cls(cls), parent(nullptr), ptr(ptr), kind(NORMAL)
+DartFunction::DartFunction(DartClass& cls, const dart::FunctionPtr ptr) : DartFnBase(), cls(cls), parent(nullptr), ptr(ptr), kind(NORMAL),
+	is_generic(false)
 {
 	auto* zone = dart::Thread::Current()->zone();
 
@@ -117,6 +118,9 @@ DartFunction::DartFunction(DartClass& cls, const dart::FunctionPtr ptr) : DartFn
 
 	is_native = func.is_native();	//is_closure = name == "<anonymous closure>";
 	is_closure = func.IsClosureFunction(); //func.IsNonImplicitClosureFunction();
+	// Closure functions with their own type parameters store delayed type arguments as the
+	// first closure element (Dart 3.13; harmless for older layouts that expose a fixed offset).
+	is_generic = is_closure && func.IsGeneric();
 	//ASSERT(is_closure == (name == "<anonymous closure>"));
 	// Note: https://github.com/dart-lang/sdk/commit/dcdfcc2b8decc8bf47881f2e93ee5503ea98b7cf#diff-fba8499e9b9e86f518a0ad80eeda6a4309ac5a82c5e9e0b0bf962505e1ecddba
 	//   IsFfiTrampoline() is changed to IsFfiCallbackTrampoline()

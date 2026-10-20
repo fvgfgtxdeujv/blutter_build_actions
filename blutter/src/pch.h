@@ -37,6 +37,14 @@ PRAGMA_WARNING(push, 0)
 #include <vm/compiler/runtime_offsets_extracted.h>
 PRAGMA_WARNING(pop)
 
+// Dart 3.13 merges the VM and isolate snapshots: dart_api.h then defines
+// kSnapshotDataAsmSymbol ("_kDartSnapshotData") and drops the VM/isolate pair.
+// The same change replaced Closure's fixed context/delayed-type-arguments fields
+// with a variable-length elements[] region, so use it as the version marker.
+#if defined(kSnapshotDataAsmSymbol) && !defined(BLUTTER_DART_SINGLE_SNAPSHOT)
+#	define BLUTTER_DART_SINGLE_SNAPSHOT
+#endif
+
 #ifdef OLD_MAP_SET_NAME
 namespace dart {
 	using Map = LinkedHashMap;

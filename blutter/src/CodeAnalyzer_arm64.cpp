@@ -8,14 +8,37 @@
 
 #ifndef NO_CODE_ANALYSIS
 
-// Dart 3.13 fallback: closures inline captures; the separate context/delayed-type-args fields
-// were removed. Emit -1 so patterns referencing them still compile.
-#ifndef AOT_Closure_context_offset
-#define AOT_Closure_context_offset (-1)
+// Dart 3.13 replaced Closure's fixed context / delayed-type-arguments fields with a
+// variable-length elements[] region, laid out as
+//   [delayed type args][instantiator type args][parent function type args][context][captures]
+// The prologue bakes the concrete offset of the analyzed function into the load, so accept any
+// valid element slot: delayed type args always sit at index 0, while the context index equals the
+// number of present type-argument fields (0..3) and is >= 1 whenever the function is generic.
+static bool isClosureContextDisp(int64_t disp, bool generic)
+{
+#ifdef BLUTTER_DART_SINGLE_SNAPSHOT
+	const int64_t off = disp + dart::kHeapObjectTag;
+	const int64_t start = AOT_Closure_elements_start_offset;
+	const int64_t size = AOT_Closure_element_size;
+	if (off < start || (off - start) % size != 0)
+		return false;
+	const int64_t idx = (off - start) / size;
+	const int64_t minIdx = generic ? 1 : 0;
+	return idx >= minIdx && idx <= 3;
+#else
+	(void)generic;
+	return disp == AOT_Closure_context_offset - dart::kHeapObjectTag;
 #endif
-#ifndef AOT_Closure_delayed_type_arguments_offset
-#define AOT_Closure_delayed_type_arguments_offset (-1)
+}
+
+static bool isClosureDelayedTypeArgsDisp(int64_t disp)
+{
+#ifdef BLUTTER_DART_SINGLE_SNAPSHOT
+	return disp + dart::kHeapObjectTag == AOT_Closure_elements_start_offset;
+#else
+	return disp == AOT_Closure_delayed_type_arguments_offset - dart::kHeapObjectTag;
 #endif
+}
 
 // auto revert ASM iterator to the current when pattern does not match or an exception occurs
 class InsnMarker
@@ -1855,6 +1878,10 @@ std::unique_ptr<SetupParametersInstr> FunctionAnalyzer::processPrologueParameter
 	auto firstParamReg = ARM64_REG_INVALID;
 	InsnMarker marker(insn);
 
+	const bool isClosureFn = dartFn->IsClosure();
+	// A closure carries delayed type arguments only when the function itself is generic.
+	const bool closureIsGeneric = isClosureFn && dartFn->IsGeneric();
+
 	const auto handleInitialization = [&] {
 		while (true) {
 			auto il = processLoadValueInstr(insn);
@@ -2030,7 +2057,7 @@ std::unique_ptr<SetupParametersInstr> FunctionAnalyzer::processPrologueParameter
 
 	// PrologueBuilder::BuildClosureContextHandling()
 	// closure context handling
-	if (dartFn->IsClosure() && insn.id() == ARM64_INS_LDUR && insn.ops(1).mem.disp == AOT_Closure_context_offset - dart::kHeapObjectTag) {
+	if (isClosureFn && insn.id() == ARM64_INS_LDUR && isClosureContextDisp(insn.ops(1).mem.disp, closureIsGeneric)) {
 		const auto arg1Reg = [&] {
 			if (fnInfo->params.numFixedParam > 0) {
 				return fnInfo->params[0].valReg;
@@ -2068,7 +2095,7 @@ std::unique_ptr<SetupParametersInstr> FunctionAnalyzer::processPrologueParameter
 		handleInitialization();
 
 	// closure delayed type arguments
-	if (dartFn->IsClosure()) {
+	if (closureIsGeneric) {
 		const auto save_ins = insn.Current();
 
 		const auto arg1Reg = [&] {
@@ -2079,7 +2106,7 @@ std::unique_ptr<SetupParametersInstr> FunctionAnalyzer::processPrologueParameter
 				a1reg = insn.ops(0).reg;
 				++insn;
 			}
-			if (insn.id() == ARM64_INS_LDUR && insn.ops(1).mem.disp == AOT_Closure_delayed_type_arguments_offset - dart::kHeapObjectTag) {
+			if (insn.id() == ARM64_INS_LDUR && isClosureDelayedTypeArgsDisp(insn.ops(1).mem.disp)) {
 				if (a1reg != ARM64_REG_INVALID) {
 					// TODO: calculate a number of function parameter
 					return A64::Register{ a1reg };

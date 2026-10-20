@@ -15,13 +15,12 @@
 #define FRIDA_TEMPLATE_DIR "scripts"
 #endif
 
-// Dart 3.13 inlined closure captures and removed the separate Closure context /
-// delayed-type-arguments fields. Fall back to -1 so the generated template still compiles.
-#ifndef AOT_Closure_context_offset
-#define AOT_Closure_context_offset (-1)
-#endif
-#ifndef AOT_Closure_delayed_type_arguments_offset
-#define AOT_Closure_delayed_type_arguments_offset (-1)
+// Dart 3.13 inlined closure captures: the context offset now depends on each function's
+// type-argument flags, so there is no single value to export.
+#ifdef BLUTTER_DART_SINGLE_SNAPSHOT
+static constexpr intptr_t kClosureContextOffset = -1;
+#else
+static constexpr intptr_t kClosureContextOffset = AOT_Closure_context_offset;
 #endif
 
 static std::filesystem::path FindFridaTemplate(const char* name)
@@ -219,7 +218,7 @@ void FridaWriter::Create(const char* filename)
 				of << "{id:" << dartCls->Id() << ",";
 				of << "name:\"Closure\",";
 				of << "fnOffset:" << AOT_Closure_function_offset << ",";
-				of << "contextOffset:" << AOT_Closure_context_offset << ",";
+				of << "contextOffset:" << kClosureContextOffset << ",";
 				of << "epOffset:" << AOT_Closure_entry_point_offset << "},\n";
 				break;
 			case dart::kTypedDataUint8ArrayCid:
