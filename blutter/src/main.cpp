@@ -7,6 +7,7 @@
 #include "PseudoCode.h"
 #include "args.hxx"
 #include <filesystem>
+#include <thread>
 
 int main(int argc, char** argv)
 {
@@ -26,7 +27,9 @@ int main(int argc, char** argv)
 	args::Flag exception(parser, "exception", "also emit exception try/handler markers in asm output (off by default)", { 'e', "exception" });
 	args::Flag types(parser, "types", "also emit recovered return-type annotations at call sites (off by default)", { 't', "types" });
 	args::Flag json(parser, "json", "also write blutter_dump.json (structured library/class/function export)", { 'j', "json" });
+	args::Flag jsonSplit(parser, "json-split", "with --json, write one file per library under blutter_dump.json.d/ and keep the main file as an index", { "json-split" });
 	args::Flag strict(parser, "strict", "abort on the first function that fails analysis (default: log and continue)", { "strict" });
+	args::ValueFlag<int> jobs(parser, "N", "disassemble with N worker threads (0 = auto, default 1)", { "jobs" }, 1);
 
 	try {
 		parser.ParseCLI(argc, argv);
@@ -57,32 +60,54 @@ int main(int argc, char** argv)
 		app.ExitScope();
 
 		app.EnterScope();
+		// Stage timing for profiling; opt-in via BLUTTER_TIMING=1.
+		const bool timing = std::getenv("BLUTTER_TIMING") != nullptr;
+		auto t0 = std::chrono::steady_clock::now();
+		const auto lap = [&](const char* what) {
+			if (!timing)
+				return;
+			auto now = std::chrono::steady_clock::now();
+			std::cerr << what << ": " << std::chrono::duration<double>(now - t0).count() << "s\n";
+			t0 = now;
+		};
 #ifndef NO_CODE_ANALYSIS
 		std::cout << "Analyzing the application\n";
 		CodeAnalyzer analyzer{ app };
-		analyzer.AnalyzeAll(static_cast<bool>(strict));
+		int jobCount = jobs ? args::get(jobs) : 1;
+		if (jobCount <= 0) {
+			const auto hw = std::thread::hardware_concurrency();
+			jobCount = (int)std::clamp<unsigned>(hw == 0 ? 1 : hw, 1, 8);
+		}
+		if (jobCount > 1)
+			std::cout << "Analyzing with " << jobCount << " threads\n";
+		analyzer.AnalyzeAll(static_cast<bool>(strict), jobCount);
 		// Fill return/parameter types dropped from the snapshot using the IL
 		// analysis result (opt-in output stays behind -t/--types).
 		app.BackfillSignaturesFromAnalysis();
 #endif
+		lap("analysis");
 
 		DartDumper dumper{ app };
 		std::cout << "Dumping Object Pool\n";
 		dumper.DumpObjectPool((outDir / "pp.txt").string().c_str());
 		dumper.DumpObjects((outDir / "objs.txt").string().c_str());
-		if (json) {
+		lap("pool+objects");
+		if (json || jsonSplit) {
 			std::cout << "Writing JSON dump\n";
 			JsonDumper jsonDumper{ app };
-			jsonDumper.Write((outDir / "blutter_dump.json").string().c_str());
+			jsonDumper.Write((outDir / "blutter_dump.json").string().c_str(), static_cast<bool>(jsonSplit));
 		}
+		lap("json");
 #ifndef NO_CODE_ANALYSIS
 		std::cout << "Generating application assemblies\n";
 #else
 		std::cout << "Generating application functions in asm folder\n";
 #endif
 		dumper.DumpCode((outDir / "asm").string().c_str());
+		lap("asm");
 		dumper.DumpStringCrossRef((outDir / "strings_to_funcs.txt").string().c_str());
 		dumper.Dump4Ida(outDir / "ida_script");
+		lap("strings+ida");
 
 		std::cout << "Generating Frida script\n";
 		FridaWriter fwriter{ app };

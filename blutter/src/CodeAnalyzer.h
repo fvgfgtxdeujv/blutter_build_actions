@@ -221,8 +221,9 @@ public:
 
 	// Analyze every function. Individual failures are logged and skipped so one bad
 	// function cannot abort the whole dump; strict=true keeps the old fail-fast
-	// behaviour for debugging.
-	void AnalyzeAll(bool strict = false);
+	// behaviour for debugging. jobs > 1 disassembles in parallel (capstone only);
+	// IL conversion stays on the calling thread because it uses Dart VM handles.
+	void AnalyzeAll(bool strict = false, int jobs = 1);
 
 private:
 	static AsmTexts convertAsm(AsmInstructions& asm_insns);

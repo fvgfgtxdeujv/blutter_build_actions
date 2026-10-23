@@ -143,6 +143,16 @@ void FridaWriter::Create(const char* filename)
 	of << "const CidUint64Array = " << dart::kTypedDataUint64ArrayCid << ";\n";
 	of << "const CidInt64Array = " << dart::kTypedDataInt64ArrayCid << ";\n";
 
+	// Generic type arguments (resolved by the Frida template to render
+	// List<int> instead of a bare List). Offsets come from the snapshot's own
+	// extracted runtime offsets, so they follow the Dart version.
+	of << "const TypeArgumentsLengthOffset = " << AOT_TypeArguments_length_offset << ";\n";
+	of << "const TypeArgumentsTypesOffset = " << AOT_TypeArguments_types_offset << ";\n";
+	of << "const TypeArgumentsOffset = " << AOT_Type_arguments_offset << ";\n";
+	of << "const TypeFlagsOffset = " << AOT_AbstractType_flags_offset << ";\n";
+	of << "const TypeClassIdShift = " << (int)dart::UntaggedType::TypeStateBits::kNextBit << ";\n";
+	of << "const TypeClassIdBits = " << (int)dart::UntaggedObject::ClassIdTag::bitsize() << ";\n";
+
 	of << "const Classes = [\n";
 	for (auto dartCls : app.classes) {
 		if (!dartCls) {
@@ -275,7 +285,9 @@ void FridaWriter::Create(const char* filename)
 			return a->Address() < b->Address();
 		});
 		for (const auto* fn : closures) {
-			of << "\t\"" << std::format("{:x}", app.offset(fn->Address())) << "\": "
+			// fn->Address() is already image-relative, the same value the template
+			// derives from (entryPoint - imageBase).
+			of << "\t\"" << std::format("{:x}", fn->Address()) << "\": "
 			   << fn->ClosureContextOffset() << ",\n";
 		}
 	}

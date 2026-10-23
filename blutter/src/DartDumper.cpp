@@ -1353,13 +1353,27 @@ std::string DartDumper::ObjectToString(dart::Object& obj, bool simpleForm, bool 
 		return std::format("Function: {} ({:#x})", dartFn->FullName(), dartFn->Address());
 	}
 	case dart::kClosureCid: {
-		// TODO: show owner
 		const auto& closure = dart::Closure::Cast(obj);
-		if (!app.functions.contains(closure.entry_point() - app.base())) {
-			std::cout << std::format("[!] missing closure at {:#x}\n", closure.entry_point() - app.base());
+		const auto closureEp = closure.entry_point() - app.base();
+		std::string owner;
+		auto fnBase = app.GetFunction(closureEp);
+		if (fnBase == nullptr || fnBase->IsStub()) {
+			std::cout << std::format("[!] missing closure at {:#x}\n", closureEp);
 		}
-		//RELEASE_ASSERT(app.functions.contains(closure.entry_point() - app.base()));
-		return std::format("{} ({:#x})", closure.ToCString(), closure.entry_point());
+		else {
+			// The closure's own name is often just "<anonymous closure>"; the
+			// enclosing function tells where it was declared.
+			auto dartFn = fnBase->AsFunction();
+			if (dartFn->IsClosure()) {
+				if (auto parentFn = dartFn->GetOutermostFunction()) {
+					owner = std::format(", in {} ({:#x})", parentFn->FullName(), parentFn->Address());
+				}
+				else {
+					owner = std::format(", of {}", dartFn->Class().FullNameWithPackage());
+				}
+			}
+		}
+		return std::format("{} ({:#x}){}", closure.ToCString(), closure.entry_point(), owner);
 	}
 	case dart::kCodeCid: {
 		const auto& code = dart::Code::Cast(obj);

@@ -1,6 +1,8 @@
 #include "pch.h"
 #include "DartLibrary.h"
 #include "DartClass.h"
+#include "DartFunction.h"
+#include <algorithm>
 #include <filesystem>
 
 DartLibrary::DartLibrary(const dart::Library& lib) : ptr(lib.ptr()), topClass(NULL)
@@ -33,10 +35,21 @@ DartLibrary::DartLibrary(const dart::Library& lib) : ptr(lib.ptr()), topClass(NU
 			AddClass(cls);
 		}
 		else if (objPtr.IsFunction()) {
-			// TODO: check if top level class contain this function
+			// Top-level functions are materialised from the top-level class function
+			// table; the library dictionary repeats them. Recover a function the table
+			// missed instead of silently dropping it.
+			auto& funcs = topClass->Functions();
+			const bool present = std::any_of(funcs.begin(), funcs.end(),
+				[&](const DartFunction* fn) { return fn->Ptr() == objPtr; });
+			if (!present)
+				topClass->AddFunction(objPtr);
 		}
 		else if (objPtr.IsField()) {
-			// TODO: check if top level class contain this field
+			auto& fields = topClass->Fields();
+			const bool present = std::any_of(fields.begin(), fields.end(),
+				[&](const DartField* field) { return field->Ptr() == objPtr; });
+			if (!present)
+				topClass->AddField(objPtr);
 		}
 		else if (objPtr.IsLibraryPrefix()) {
 			throw std::runtime_error("library prefix in AOT");

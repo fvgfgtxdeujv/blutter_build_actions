@@ -75,7 +75,61 @@ function getDartTwoByteString(ptr, cls) {
     return ptr.add(cls.dataOffset).readUtf16String(len * 2);
 }
 
-function getDartArray(ptr, cls, depthLeft, glen = null) {
+
+// --- Generic type arguments -------------------------------------------------
+// An instance whose class declares type parameters keeps a TypeArguments
+// object at cls.argOffset. TypeArguments holds a length (Smi) and an array of
+// Type objects; a Type stores its class id packed into UntaggedAbstractType
+// flags and its own arguments for nested generics (Map<K, V>).
+function getDartTypeArgumentNames(tapPtr) {
+    if (tapPtr.isNull())
+        return null;
+    const tap = tapPtr;
+    const len = Number(smiUntag(wordBigAt(tap, TypeArgumentsLengthOffset)));
+    if (len <= 0 || len > 32)
+        return null;
+    let names = [];
+    for (let i = 0; i < len; i++) {
+        const tptr = tap.add(TypeArgumentsTypesOffset + i * TaggedWordSize).readPointer();
+        names.push(getDartTypeName(tptr));
+    }
+    return names;
+}
+
+function getDartTypeName(tptr) {
+    try {
+        if (!isHeapObject(tptr))
+            return 'dynamic';
+        const ptr = tptr.sub(1);
+        const flags = ptr.add(TypeFlagsOffset).readU32();
+        const cid = (flags >>> TypeClassIdShift) & ((1 << TypeClassIdBits) - 1);
+        const cls = Classes[cid];
+        let name = (cls === null || cls === undefined) ? `cid_${cid}` : cls.name;
+        const args = getDartTypeArgumentNames(ptr.add(TypeArgumentsOffset).readPointer());
+        if (args !== null)
+            name += `<${args.join(', ')}>`;
+        return name;
+    }
+    catch (e) {
+        return '?';
+    }
+}
+
+// Returns a display string such as "int" or "Map<String, int>", or null.
+function getDartTypeArguments(ptr, cls) {
+    if (cls.argOffset === undefined || cls.argOffset < 0)
+        return null;
+    const args = getDartTypeArgumentNames(ptr.add(cls.argOffset).readPointer());
+    return args === null ? null : args.join(', ');
+}
+
+function withTypeArguments(vals, typeArgs) {
+    if (typeArgs !== null)
+        Object.defineProperty(vals, 'typeArguments', { value: typeArgs, enumerable: false });
+    return vals;
+}
+
+function getDartArray(ptr, cls, depthLeft, glen = null, typeArgs = null) {
     const rawLen = glen === null ? fmtSmi(smiUntag(wordBigAt(ptr, cls.lenOffset))) : glen;
     const len = typeof rawLen === 'number' ? rawLen : Number(rawLen);
     let vals = [];
@@ -91,13 +145,14 @@ function getDartArray(ptr, cls, depthLeft, glen = null) {
             vals.push({ key: fieldValue });
         }
     }
-    return vals;
+    return withTypeArguments(vals, typeArgs);
 }
 
 function getDartGrowableArray(ptr, cls, depthLeft) {
     const len = fmtSmi(smiUntag(wordBigAt(ptr, cls.lenOffset)));
+    const typeArgs = getDartTypeArguments(ptr, cls);
     let arrPtr = ptr.add(cls.dataOffset);
-    return getDartArray(arrPtr, Classes[CidArray], depthLeft, len);
+    return getDartArray(arrPtr, Classes[CidArray], depthLeft, len, typeArgs);
 }
 
 function getDartTypedArrayValues(ptr, cls, elementSize, readValFn) {
@@ -262,7 +317,9 @@ function getInstanceValue(ptr, cls, scls, depthLeft = MaxDepth) {
     let offset = scls.size;
     while (offset < cls.size) {
         if (offset == cls.argOffset) {
-            // TODO: type arguments
+            const typeArgs = getDartTypeArguments(ptr, cls);
+            if (typeArgs !== null)
+                values['typeArgs'] = typeArgs;
             offset += TaggedWordSize;
         }
         else if (isFieldNative(cls.fbitmap, offset)) {
@@ -285,7 +342,10 @@ function getInstanceValue(ptr, cls, scls, depthLeft = MaxDepth) {
                 values[`off_${offset.toString(16)}!Smi`] = fieldValue;
             }
             else if (ocls.id !== CidNull) {
-                values[`off_${offset.toString(16)}!${ocls.name}@${tptr.toString().slice(2)}`] = fieldValue;
+                // Reflect the static element type (List<int>, Map<K, V>) in the key.
+                const typeArgs = getDartTypeArguments(dptr.sub(1), ocls);
+                const typeSuffix = typeArgs === null ? '' : `<${typeArgs}>`;
+                values[`off_${offset.toString(16)}!${ocls.name}${typeSuffix}@${tptr.toString().slice(2)}`] = fieldValue;
             }
             else if (ShowNullField) {
                 values[`off_${offset.toString(16)}`] = fieldValue;

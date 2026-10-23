@@ -134,6 +134,25 @@ blutter_dartvm3.3.4_android_arm64 --blacklist /path/to/my.txt -i libapp.so -o ou
 blutter_dartvm3.3.4_android_arm64 -i libapp.so -o out -p
 ```
 
+## 输出开关（可选）
+
+默认输出与经典 blutter 一致；以下开关按需追加，互不覆盖：
+
+| 开关 | 作用 |
+|------|------|
+| `-p` / `--pseudo` | 每个函数追加 `// pseudo:` 伪代码注释 |
+| `-e` / `--exception` | 在汇编行旁标注 try/handler 归属，并生成 `asm/exceptions.txt` |
+| `-t` / `--types` | 在调用点追加恢复出的返回类型注释 |
+| `-j` / `--json` | 额外生成 `blutter_dump.json`（库/类/函数结构化导出，含 `schemaVersion`） |
+| `--json-split` | 配合 `-j`：每个库写一个 `blutter_dump.json.d/NNNN-<lib>.json`，主文件退化为索引（含 `"split": true`） |
+| `--strict` | 单个函数分析失败时立即中止（默认记录后继续，末尾打印 `Analyzed N functions, M failed`） |
+| `--jobs N` | 反汇编阶段使用 N 个线程（`0` 表示按 CPU 数自动，上限 8）；IL 转换仍在主线程串行，输出顺序不变 |
+| `--app` | 仅 `scripts/build.py generate-sources`：从 `libapp.so` 自动提取快照哈希并传给 dartvm 生成脚本 |
+
+设置 `BLUTTER_TIMING=1` 会在 stderr 打印各阶段耗时（analysis / pool+objects / json / asm / strings+ida），便于定位瓶颈。
+
+Frida 脚本会解析泛型实参：`List<int>`、`Map<String, int>` 等类型在实例字段的 key 中显示为 `off_18!List<int>@addr`，数组值非枚举地带上 `typeArguments` 属性；实例自身类型参数额外输出为 `typeArgs` 字段。
+
 ## 其他
 
 - **版本兼容**：与官方 blutter 支持的 Dart 版本一致，下界为 Dart 2.14.x。其中 2.14.x 使用 no-analysis 变体（仅 dump Object Pool，不做反汇编分析），且因 Flutter <2.8 未启用压缩指针，产物为 `_no-compressed-ptrs_no-analysis`；3.0~3.3 由 `scripts/build.py` 自动探测宏后编译（默认回归版本 3.3.4 即属该区间）

@@ -10,7 +10,9 @@ class JsonDumper
 public:
 	explicit JsonDumper(DartApp& app) : app(app) {}
 
-	void Write(const char* filename);
+	// Write one document. With split=true the main file becomes an index and each
+	// library is written to "<filename>.d/" so consumers can diff a single library.
+	void Write(const char* filename, bool split = false);
 
 private:
 	DartApp& app;
