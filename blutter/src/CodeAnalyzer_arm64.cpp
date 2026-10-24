@@ -1,6 +1,6 @@
 #include "pch.h"
 #include "CodeAnalyzer.h"
-#include "ClosureLayout.h"
+#include "ClosureMatcher.h"
 #include "DartApp.h"
 #include "VarValue.h"
 #include "DartThreadInfo.h"
@@ -9,37 +9,8 @@
 
 #ifndef NO_CODE_ANALYSIS
 
-// The prologue bakes the concrete closure field offset of the analyzed function into the
-// load, so 3.13 matches an element index instead of a single fixed offset.
-// See ClosureLayout.h for the accepted index range.
-static bool isClosureContextDisp(int64_t disp, bool generic)
-{
-#ifdef BLUTTER_DART_SINGLE_SNAPSHOT
-	const int idx = blutter::closure_layout::ElementIndex(
-		disp + dart::kHeapObjectTag,
-		AOT_Closure_elements_start_offset,
-		AOT_Closure_element_size);
-	return blutter::closure_layout::IsContextElement(idx, generic);
-#else
-	(void)generic;
-	return blutter::closure_layout::IsFixedFieldDisp(
-		disp, AOT_Closure_context_offset, dart::kHeapObjectTag);
-#endif
-}
-
-static bool isClosureDelayedTypeArgsDisp(int64_t disp)
-{
-#ifdef BLUTTER_DART_SINGLE_SNAPSHOT
-	const int idx = blutter::closure_layout::ElementIndex(
-		disp + dart::kHeapObjectTag,
-		AOT_Closure_elements_start_offset,
-		AOT_Closure_element_size);
-	return blutter::closure_layout::IsDelayedTypeArgsElement(idx);
-#else
-	return blutter::closure_layout::IsFixedFieldDisp(
-		disp, AOT_Closure_delayed_type_arguments_offset, dart::kHeapObjectTag);
-#endif
-}
+using blutter::closure_layout::IsClosureContextDisp;
+using blutter::closure_layout::IsClosureDelayedTypeArgsDisp;
 
 // auto revert ASM iterator to the current when pattern does not match or an exception occurs
 class InsnMarker
@@ -2058,7 +2029,7 @@ std::unique_ptr<SetupParametersInstr> FunctionAnalyzer::processPrologueParameter
 
 	// PrologueBuilder::BuildClosureContextHandling()
 	// closure context handling
-	if (isClosureFn && insn.id() == ARM64_INS_LDUR && isClosureContextDisp(insn.ops(1).mem.disp, closureIsGeneric)) {
+	if (isClosureFn && insn.id() == ARM64_INS_LDUR && IsClosureContextDisp(insn.ops(1).mem.disp, closureIsGeneric)) {
 		// Record the concrete context offset for Frida output (it differs per closure
 		// once Dart 3.13 inlines the field into elements[]).
 		dartFn->SetClosureContextOffset(insn.ops(1).mem.disp + dart::kHeapObjectTag);
@@ -2110,7 +2081,7 @@ std::unique_ptr<SetupParametersInstr> FunctionAnalyzer::processPrologueParameter
 				a1reg = insn.ops(0).reg;
 				++insn;
 			}
-			if (insn.id() == ARM64_INS_LDUR && isClosureDelayedTypeArgsDisp(insn.ops(1).mem.disp)) {
+			if (insn.id() == ARM64_INS_LDUR && IsClosureDelayedTypeArgsDisp(insn.ops(1).mem.disp)) {
 				if (a1reg != ARM64_REG_INVALID) {
 					// TODO: calculate a number of function parameter
 					return A64::Register{ a1reg };

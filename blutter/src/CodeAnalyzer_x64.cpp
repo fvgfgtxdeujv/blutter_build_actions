@@ -3,7 +3,7 @@
 #include "DartApp.h"
 #include "VarValue.h"
 #include "DartThreadInfo.h"
-#include "ClosureLayout.h"
+#include "ClosureMatcher.h"
 #include <source_location>
 #include <unordered_set>
 
@@ -2022,16 +2022,10 @@ std::unique_ptr<SetupParametersInstr> FunctionAnalyzer::processPrologueParameter
 // the compiler slips the stack-overflow check in between.
 void FunctionAnalyzer::recordClosureContextOffset(AsmIterator begin)
 {
-#ifdef BLUTTER_DART_SINGLE_SNAPSHOT
-	// Dart 3.13 inlines the context into a variable-length elements[] region, so a
-	// prologue offset only means something once the analyzer knows which element a
-	// load refers to. The x64 IL layer models no closure contexts, so every guess
-	// would risk reporting a wrong element index; keep the explicit unknown marker.
-	(void)begin;
-#else
-	// The context sits at a fixed offset on <=3.12, so a match is always the right
-	// value even if the register traced back to a parameter instead of the closure.
-	const int64_t contextDisp = AOT_Closure_context_offset - dart::kHeapObjectTag;
+	// The context sits at a fixed offset before Dart 3.13 and at an elements[] index
+	// afterwards; IsClosureContextDisp() knows which layout the build targets and,
+	// for 3.13, needs the function's type-parameter state. Either way a match is the
+	// right value even if the register traced back to a parameter instead of the closure.
 
 	// rdi always carries the first argument, which for a closure is the closure
 	// itself; other registers become candidates once filled from a stack slot.
@@ -2055,7 +2049,8 @@ void FunctionAnalyzer::recordClosureContextOffset(AsmIterator begin)
 		if (dstReg < 0 || dstReg >= X86_REG_ENDING || baseReg < 0 || baseReg >= X86_REG_ENDING)
 			continue;
 
-		if (holdsClosure[baseReg] && src.mem.disp == contextDisp) {
+		if (holdsClosure[baseReg] && blutter::closure_layout::IsClosureContextDisp(
+				src.mem.disp, dartFn->IsGeneric())) {
 			// The loaded value has to be consumed as a context soon after; allow a
 			// few instructions for the stack-overflow check the compiler inserts
 			// between the load and the first captured-variable access.
@@ -2086,7 +2081,6 @@ void FunctionAnalyzer::recordClosureContextOffset(AsmIterator begin)
 		if (IsCsDartFp((x86_reg)src.mem.base) || (x86_reg)src.mem.base == X86_REG_RSP)
 			holdsClosure[dstReg] = true;
 	}
-#endif
 }
 
 void FunctionAnalyzer::handlePrologue(AsmIterator& insn, uint64_t endPrologueAddr)
