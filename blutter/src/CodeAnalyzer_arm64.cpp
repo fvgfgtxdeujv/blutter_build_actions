@@ -1937,6 +1937,18 @@ std::unique_ptr<SetupParametersInstr> FunctionAnalyzer::processPrologueParameter
 				//const int numParam = ((firstParamOffset - 0x10) / sizeof(void*)) + 1;
 				++insn;
 			}
+			// Frameless closures (no EnterFrame/AllocStack) read the hidden closure argument
+			// straight from the incoming argument slots above SP. Incoming arguments are
+			// pushed in reverse order, so the closure pointer sits at 8 * (NumParam - 1)
+			// above SP while the last explicit parameter occupies [SP].
+			else if (insn.id() == ARM64_INS_LDR && insn.ops(1).mem.base == ARM64_REG_SP) {
+				const auto numParam = dartFn->NumParam();
+				if (numParam > 0 && insn.ops(1).mem.disp == static_cast<int64_t>(sizeof(void*)) * (numParam - 1)) {
+					firstParamReg = insn.ops(0).reg;
+					fnInfo->State()->SetRegister(A64::Register{ insn.ops(0).reg }, fnInfo->Vars()->ValParam(0));
+					++insn;
+				}
+			}
 		}
 	}
 
