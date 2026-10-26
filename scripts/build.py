@@ -73,7 +73,13 @@ def _inject_atomic_ref_shim(env):
 
     libc++ 16 lacks std::atomic_ref, which the Dart VM headers use. The shim is
     a no-op when the standard library already provides std::atomic_ref. Applied
-    to both the dartvm and blutter builds so they share one standard library."""
+    to both the dartvm and blutter builds so they share one standard library.
+
+    MSVC is skipped: it has no `-include` option (CMake's compiler probe fails
+    with "ignoring unknown option '-include'"), and its standard library already
+    provides std::atomic_ref."""
+    if sys.platform == 'win32':
+        return
     shim = PROJECT_DIR / "scripts" / "atomic_ref_shim.h"
     if shim.exists():
         flags = env.get("CXXFLAGS", "")
