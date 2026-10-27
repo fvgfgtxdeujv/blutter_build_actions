@@ -272,6 +272,7 @@ public:
 
 	// returns an instruction after the prologue
 	void handlePrologue(AsmIterator& insItr, uint64_t endPrologueAddr);
+	void recordClosureContextOffset(AsmIterator begin);
 	std::tuple<A64::Register, A64::Register> unboxParam(AsmIterator& insn, A64::Register expectedSrcReg = A64::Register{});
 	void handleFixedParameters(AsmIterator& insn, arm64_reg paramCntReg, int paramCnt = 0);
 	void handleOptionalPositionalParameters(AsmIterator& insn, arm64_reg optionalParamCntReg);
@@ -841,8 +842,85 @@ StoreLocalResult FunctionAnalyzer::handleStoreLocal(AsmIterator& insn, arm64_reg
 	return StoreLocalResult{ srcReg, offset };
 }
 
+// The IL layer only models the closure context inside the regular (framed) prologue, so
+// leaf closures would lose the context offset. Frida and the JSON dump still need it, and
+// the load is unambiguous regardless of the frame shape:
+//   ldr  x2, [SP, #slot]      ; closure argument (frameless) or
+//   ldr  x2, [FP, #slot]      ; closure argument (framed), or x1 on entry
+//   ldur w3, [x2, #<ctx>]     ; context element/field
+//   ...
+// The value is only recorded when the loaded register is used as a memory base soon
+// after, which distinguishes the context load from an ordinary field read.
+void FunctionAnalyzer::recordClosureContextOffset(AsmIterator begin)
+{
+	std::array<bool, ARM64_REG_ENDING> holdsClosure{};
+	// x1 carries the first argument on entry, which for a closure is the closure itself.
+	holdsClosure[ARM64_REG_X1] = true;
+
+	AsmIterator it = begin;
+	for (int budget = 32; budget > 0 && !it.IsEnd(); --budget, ++it) {
+		const auto id = it.id();
+		if (id == ARM64_INS_B || id == ARM64_INS_BLR || id == ARM64_INS_RET || id == ARM64_INS_BR)
+			break;
+		if (it.op_count() < 2)
+			continue;
+
+		const auto& dst = it.ops(0);
+		const auto& src = it.ops(1);
+		if (dst.type != ARM64_OP_REG || src.type != ARM64_OP_MEM)
+			continue;
+		const auto dstReg = dst.reg;
+		const auto baseReg = src.mem.base;
+		if (dstReg < 0 || dstReg >= ARM64_REG_ENDING || baseReg < 0 || baseReg >= ARM64_REG_ENDING)
+			continue;
+
+		if (holdsClosure[baseReg] && IsClosureContextDisp(src.mem.disp, dartFn->IsGeneric())) {
+			// The context is often read much later (after the other arguments are
+			// unpacked), so keep looking until the register is clobbered or a call ends
+			// the block. Pointer decompression (`add ctx, ctx, HEAP`) is not a clobber.
+			AsmIterator next = it;
+			for (int look = 0; look < 20 && !next.IsEnd(); look++) {
+				++next;
+				bool used = false;
+				for (int i = 0; i < next.op_count(); i++) {
+					const auto& op = next.ops(i);
+					used |= op.type == ARM64_OP_MEM && op.mem.base == dstReg;
+				}
+				// ... or spilled to a local slot for later use
+				if (!used && next.id() == ARM64_INS_STUR && next.op_count() == 2)
+					used = next.ops(0).reg == dstReg;
+				if (used) {
+					dartFn->SetClosureContextOffset(src.mem.disp + dart::kHeapObjectTag);
+					return;
+				}
+				// the context is not used after a call or return
+				if (next.id() == ARM64_INS_B || next.id() == ARM64_INS_BLR ||
+					next.id() == ARM64_INS_RET || next.id() == ARM64_INS_BR)
+					break;
+				// the register was overwritten before being used: not a context load
+				if (next.op_count() >= 1 && next.ops(0).type == ARM64_OP_REG && next.ops(0).reg == dstReg) {
+					const bool selfUpdate = next.op_count() == 2 &&
+						next.ops(1).type == ARM64_OP_REG && next.ops(1).reg == dstReg;
+					if (!selfUpdate)
+						break;
+				}
+			}
+		}
+		// parameters and the closure argument are loaded from the incoming stack slots
+		if (id == ARM64_INS_LDR && (src.mem.base == ARM64_REG_SP || src.mem.base == CSREG_DART_FP) &&
+			src.mem.disp > 0) {
+			holdsClosure[dstReg] = true;
+		}
+	}
+}
+
 void FunctionAnalyzer::handlePrologue(AsmIterator& insn, uint64_t endPrologueAddr)
 {
+	// The context load has to be recovered before the frame shape is inspected: a leaf
+	// closure has no EnterFrame and returns early below, while still loading the context.
+	if (dartFn->IsClosure())
+		recordClosureContextOffset(insn);
+
 	{
 		auto ilEnter = processEnterFrameInstr(insn);
 		if (!ilEnter) {
@@ -1936,18 +2014,6 @@ std::unique_ptr<SetupParametersInstr> FunctionAnalyzer::processPrologueParameter
 				fnInfo->State()->SetRegister(A64::Register{ insn.ops(0).reg }, fnInfo->Vars()->ValParam(0));
 				//const int numParam = ((firstParamOffset - 0x10) / sizeof(void*)) + 1;
 				++insn;
-			}
-			// Frameless closures (no EnterFrame/AllocStack) read the hidden closure argument
-			// straight from the incoming argument slots above SP. Incoming arguments are
-			// pushed in reverse order, so the closure pointer sits at 8 * (NumParam - 1)
-			// above SP while the last explicit parameter occupies [SP].
-			else if (insn.id() == ARM64_INS_LDR && insn.ops(1).mem.base == ARM64_REG_SP) {
-				const auto numParam = dartFn->NumParam();
-				if (numParam > 0 && insn.ops(1).mem.disp == static_cast<int64_t>(sizeof(void*)) * (numParam - 1)) {
-					firstParamReg = insn.ops(0).reg;
-					fnInfo->State()->SetRegister(A64::Register{ insn.ops(0).reg }, fnInfo->Vars()->ValParam(0));
-					++insn;
-				}
 			}
 		}
 	}
