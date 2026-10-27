@@ -125,44 +125,6 @@ static void* load_map_file(const char* path)
 	CloseHandle(hFile);
 	return mem;
 }
-
-	LARGE_INTEGER fileSize{};
-	if (!GetFileSizeEx(hFile, &fileSize) || fileSize.QuadPart <= 0) {
-		CloseHandle(hFile);
-		return NULL;
-	}
-	const SIZE_T size = static_cast<SIZE_T>(fileSize.QuadPart);
-
-	// Dart AOT snapshots contain executable stub/code pages. DEP requires RX (or RWX);
-	// plain FILE_MAP_COPY is RW-only and crashes in Dart_Initialize on Windows.
-	// Also need writable BSS for snapshot init — use RWX private mapping.
-	void* mem = VirtualAlloc(NULL, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-	if (mem == NULL) {
-		CloseHandle(hFile);
-		return NULL;
-	}
-
-	DWORD read = 0;
-	SIZE_T total = 0;
-	while (total < size) {
-		const DWORD chunk = static_cast<DWORD>((std::min)(static_cast<SIZE_T>(1 << 20), size - total));
-		if (!ReadFile(hFile, static_cast<uint8_t*>(mem) + total, chunk, &read, NULL) || read == 0) {
-			VirtualFree(mem, 0, MEM_RELEASE);
-			CloseHandle(hFile);
-			return NULL;
-		}
-		total += read;
-	}
-
-	DWORD oldProt = 0;
-	if (!VirtualProtect(mem, size, PAGE_EXECUTE_READWRITE, &oldProt)) {
-		VirtualFree(mem, 0, MEM_RELEASE);
-		return NULL;
-	}
-
-	CloseHandle(hFile);
-	return mem;
-}
 #else
 static void* load_map_file(const char* path)
 {
