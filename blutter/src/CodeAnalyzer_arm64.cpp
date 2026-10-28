@@ -912,8 +912,10 @@ void FunctionAnalyzer::recordClosureContextOffset(AsmIterator begin)
 				}
 			}
 		}
-		// parameters and the closure argument are loaded from the incoming stack slots
-		if (id == ARM64_INS_LDR && (baseReg == ARM64_REG_SP || baseReg == CSREG_DART_FP) &&
+		// Parameters and the closure argument are loaded from the incoming stack slots.
+		// Frameless closures address them through the Dart stack register (x15, CSREG_DART_SP),
+		// so the plain hardware SP never shows up as a base here.
+		if (id == ARM64_INS_LDR && (baseReg == CSREG_DART_SP || baseReg == CSREG_DART_FP) &&
 			src.mem.disp > 0) {
 			holdsClosure[dstReg] = true;
 		}
