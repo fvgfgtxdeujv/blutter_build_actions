@@ -869,8 +869,9 @@ void FunctionAnalyzer::recordClosureContextOffset(AsmIterator begin)
 		const auto& src = it.ops(1);
 		if (dst.type != ARM64_OP_REG || src.type != ARM64_OP_MEM)
 			continue;
-		const auto dstReg = dst.reg;
-		const auto baseReg = src.mem.base;
+		// capstone reports the width the instruction uses (w3 vs x3); keep one canonical form
+		const auto dstReg = ToCapstoneReg(dst.reg);
+		const auto baseReg = ToCapstoneReg(src.mem.base);
 		if (dstReg < 0 || dstReg >= ARM64_REG_ENDING || baseReg < 0 || baseReg >= ARM64_REG_ENDING)
 			continue;
 
@@ -884,11 +885,11 @@ void FunctionAnalyzer::recordClosureContextOffset(AsmIterator begin)
 				bool used = false;
 				for (int i = 0; i < next.op_count(); i++) {
 					const auto& op = next.ops(i);
-					used |= op.type == ARM64_OP_MEM && op.mem.base == dstReg;
+					used |= op.type == ARM64_OP_MEM && ToCapstoneReg(op.mem.base) == dstReg;
 				}
 				// ... or spilled to a local slot for later use
 				if (!used && next.id() == ARM64_INS_STUR && next.op_count() == 2)
-					used = next.ops(0).reg == dstReg;
+					used = ToCapstoneReg(next.ops(0).reg) == dstReg;
 				if (used) {
 					dartFn->SetClosureContextOffset(src.mem.disp + dart::kHeapObjectTag);
 					return;
@@ -898,16 +899,21 @@ void FunctionAnalyzer::recordClosureContextOffset(AsmIterator begin)
 					next.id() == ARM64_INS_RET || next.id() == ARM64_INS_BR)
 					break;
 				// the register was overwritten before being used: not a context load
-				if (next.op_count() >= 1 && next.ops(0).type == ARM64_OP_REG && next.ops(0).reg == dstReg) {
-					const bool selfUpdate = next.op_count() == 2 &&
-						next.ops(1).type == ARM64_OP_REG && next.ops(1).reg == dstReg;
+				if (next.op_count() >= 1 && next.ops(0).type == ARM64_OP_REG &&
+					ToCapstoneReg(next.ops(0).reg) == dstReg) {
+					bool selfUpdate = false;
+					for (int i = 1; i < next.op_count(); i++) {
+						const auto& op = next.ops(i);
+						selfUpdate |= (op.type == ARM64_OP_REG && ToCapstoneReg(op.reg) == dstReg) ||
+							(op.type == ARM64_OP_MEM && ToCapstoneReg(op.mem.base) == dstReg);
+					}
 					if (!selfUpdate)
 						break;
 				}
 			}
 		}
 		// parameters and the closure argument are loaded from the incoming stack slots
-		if (id == ARM64_INS_LDR && (src.mem.base == ARM64_REG_SP || src.mem.base == CSREG_DART_FP) &&
+		if (id == ARM64_INS_LDR && (baseReg == ARM64_REG_SP || baseReg == CSREG_DART_FP) &&
 			src.mem.disp > 0) {
 			holdsClosure[dstReg] = true;
 		}
